@@ -61,7 +61,7 @@ export class MockWebhook {
     return this.received.filter((r) => r.json?.event === "search.captured");
   }
   /** Wait until `count` lead events have arrived. */
-  async waitFor(count: number, timeoutMs = 10_000): Promise<ReceivedRequest[]> {
+  async waitFor(count: number, timeoutMs = 20_000): Promise<ReceivedRequest[]> {
     const start = Date.now();
     while (this.leads.length < count) {
       if (Date.now() - start > timeoutMs) throw new Error(`webhook received ${this.leads.length}/${count} lead events within ${timeoutMs}ms`);

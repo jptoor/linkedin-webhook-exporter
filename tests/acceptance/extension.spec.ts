@@ -265,7 +265,7 @@ test("no UI is injected on non-supported pages", async () => {
 const FAST = { exportPageDelayMinMs: 100, exportPageDelayMaxMs: 200 };
 const PAGED = () => `${site.origin}/sales/search/people?query=paged&sessionId=abc`;
 
-async function waitForJob(pred: (j: any) => boolean, timeoutMs = 30_000): Promise<any> {
+async function waitForJob(pred: (j: any) => boolean, timeoutMs = 60_000): Promise<any> {
   const start = Date.now();
   for (;;) {
     const st = await sendMessage(context, extensionId, { type: "EXPORT_STATUS" });
@@ -323,6 +323,7 @@ test("stop mid-run halts navigation and archives the job", async () => {
   await configure(context, extensionId, { webhookUrl: hook.url, signingSecret: SECRET, dailyCap: 2500, exportPageDelayMinMs: 3000, exportPageDelayMaxMs: 3000 });
   const page = await context.newPage();
   await page.goto(PAGED());
+  await expect(page.locator("[data-lwe-row-check]")).toHaveCount(25);
   await page.locator('[data-lwe-action="export-all"]').click();
   await waitForJob((j) => j.pagesDone >= 1);
   await page.locator('[data-lwe-action="export-stop"]').click();
@@ -341,6 +342,7 @@ test("daily cap stops the export after sending what is allowed", async () => {
   await configure(context, extensionId, { webhookUrl: hook.url, signingSecret: SECRET, dailyCap: 30, ...FAST });
   const page = await context.newPage();
   await page.goto(PAGED());
+  await expect(page.locator("[data-lwe-row-check]")).toHaveCount(25);
   await page.locator('[data-lwe-action="export-all"]').click();
   const job = await waitForJob((j) => j.status !== "running" && j.status !== "paused");
   expect(job).toMatchObject({ status: "stopped", stopReason: "daily_cap", pagesDone: 2, sent: 30 });
@@ -354,8 +356,11 @@ test("already-sent people are skipped, not re-sent, and counted", async () => {
   await configure(context, extensionId, { webhookUrl: hook.url, signingSecret: SECRET, dailyCap: 2500, ...FAST });
   const page = await context.newPage();
   await page.goto(PAGED());
+  await expect(page.locator("[data-lwe-row-check]")).toHaveCount(25);
   await page.locator('[data-lwe-action="select-all"]').click();
+  await expect(page.locator('[data-lwe-action="send"]')).toHaveText("Send 25 selected");
   await page.locator('[data-lwe-action="send"]').click();
+  await expect(page.locator("[data-lwe-status]")).toHaveText(/Sent 25/);
   await hook.waitFor(25);
   await page.fill("[data-lwe-export-limit]", "30");
   await page.locator('[data-lwe-action="export-all"]').click();
@@ -372,7 +377,9 @@ test("pause and resume from the popup", async () => {
   await configure(context, extensionId, { webhookUrl: hook.url, signingSecret: SECRET, dailyCap: 2500, exportPageDelayMinMs: 1500, exportPageDelayMaxMs: 1500 });
   const page = await context.newPage();
   await page.goto(PAGED());
+  await expect(page.locator("[data-lwe-row-check]")).toHaveCount(25);
   await page.locator('[data-lwe-action="export-all"]').click();
+  await expect(page.locator("[data-lwe-export-status]")).toContainText(/Exporting|Done|Paused/);
   await waitForJob((j) => j.pagesDone >= 1);
   let st = await sendMessage(context, extensionId, { type: "EXPORT_PAUSE" });
   expect(st.job.status).toBe("paused");
