@@ -1,0 +1,132 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>LinkedIn Webhook Exporter · Options</title>
+<style>
+  body { font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #111; background: #f6f8fa; margin: 0; }
+  main { max-width: 720px; margin: 32px auto; background: #fff; border: 1px solid #d0d7de; border-radius: 12px; padding: 28px 32px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .brandbar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; font-size: 12px; color: #6b6478; }
+  .brandbar img { display: block; }
+  footer { max-width: 720px; margin: 14px auto 40px; font-size: 12px; color: #6b6478; text-align: center; }
+  footer a { color: #1C112A; }
+  h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: #57606a; margin: 28px 0 10px; }
+  .muted { color: #57606a; font-size: 13px; }
+  label { display: block; font-weight: 600; margin: 14px 0 4px; }
+  input[type=text], input[type=url], input[type=password], input[type=number], select, textarea { width: 100%; padding: 8px 10px; border: 1px solid #d0d7de; border-radius: 6px; font: inherit; }
+  textarea { min-height: 70px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  .row { display: flex; gap: 12px; }
+  .row > * { flex: 1; }
+  .check { display: flex; align-items: center; gap: 8px; font-weight: 500; margin: 8px 0; }
+  .check input { width: auto; }
+  button { appearance: none; border: 0; border-radius: 6px; padding: 9px 16px; background: #1C112A; color: #fff; font-weight: 600; font-size: 14px; cursor: pointer; }
+  button.secondary { background: #f1eff5; color: #1C112A; }
+  .actions { display: flex; gap: 10px; margin-top: 24px; align-items: center; }
+  #status { font-size: 13px; }
+  #status.ok { color: #1a7f37; } #status.err { color: #b42318; }
+  code { background: #f1f3f5; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+  .warn { background: #fff8e6; border: 1px solid #f5d77a; border-radius: 8px; padding: 10px 12px; font-size: 13px; margin-top: 8px; }
+</style>
+</head>
+<body>
+<main>
+  <div class="brandbar"><img src="brand/deepline-wordmark.svg" alt="Deepline" height="16"><span>open source</span></div>
+  <h1>LinkedIn Webhook Exporter</h1>
+  <div class="muted">Everything here is stored only in this browser profile. Nothing is sent anywhere except to the webhook URL below.</div>
+
+  <h2>Destination</h2>
+  <label for="webhookUrl">Webhook URL</label>
+  <input id="webhookUrl" type="url" placeholder="https://example.com/webhooks/linkedin" autocomplete="off">
+  <div class="muted">Must be <code>https://</code>. <code>http://localhost</code> is allowed for development.</div>
+
+  <label for="signingSecret">Signing secret (HMAC-SHA256)</label>
+  <input id="signingSecret" type="password" autocomplete="off" placeholder="Leave blank to send unsigned (not recommended)">
+  <label for="signatureScheme">Signature scheme</label>
+  <select id="signatureScheme">
+    <option value="lwe">LWE: X-LWE-Signature sha256=hex over timestamp.body</option>
+    <option value="standard">Standard Webhooks: webhook-id / webhook-timestamp / webhook-signature (Deepline, Svix)</option>
+  </select>
+  <div class="muted">Standard Webhooks secrets are base64 and usually start with <code>whsec_</code>. Receivers verify with the same secret. Every request also carries <code>Idempotency-Key</code>.</div>
+
+  <div class="row">
+    <div>
+      <label for="authHeaderName">Extra auth header (optional)</label>
+      <input id="authHeaderName" type="text" placeholder="Authorization">
+    </div>
+    <div>
+      <label for="authHeaderValue">Header value</label>
+      <input id="authHeaderValue" type="password" autocomplete="off" placeholder="Bearer …">
+    </div>
+  </div>
+
+  <h2>Payload</h2>
+  <div class="row">
+    <div>
+      <label for="mappingPreset">Field mapping</label>
+      <select id="mappingPreset">
+        <option value="generic">Generic (nested JSON envelope)</option>
+        <option value="flat">Flat (one level, Clay / Zapier / sheets)</option>
+        <option value="deepline">Deepline (flat, Deepline field names)</option>
+      </select>
+    </div>
+    <div>
+      <label for="sendMode">Send mode</label>
+      <select id="sendMode">
+        <option value="single">Single: one request per lead (recommended)</option>
+        <option value="batch">Batch: one request per selection</option>
+      </select>
+    </div>
+  </div>
+
+  <label for="capturedBy">Captured by (label)</label>
+  <input id="capturedBy" type="text" placeholder="e.g. jai@company.com or SDR-East">
+
+  <label for="customFields">Custom fields (one <code>key=value</code> per line, sent as <code>custom</code>)</label>
+  <textarea id="customFields" placeholder="campaign=q3-outbound&#10;persona=vp-sales"></textarea>
+
+  <label class="check"><input id="includeExperience" type="checkbox"> Include experience history (profile pages)</label>
+  <label class="check"><input id="includeEducation" type="checkbox"> Include education (profile pages)</label>
+  <label class="check"><input id="includeAbout" type="checkbox"> Include About text (profile pages)</label>
+
+  <h2>Safety</h2>
+  <label class="check"><input id="dedupe" type="checkbox"> Skip profiles already sent</label>
+  <div class="row">
+    <div>
+      <label for="dedupeTtlDays">Remember sent profiles for (days)</label>
+      <input id="dedupeTtlDays" type="number" min="1" max="365">
+    </div>
+    <div>
+      <label for="dailyCap">Daily capture cap</label>
+      <input id="dailyCap" type="number" min="1" max="2000">
+    </div>
+  </div>
+  <h2>Bulk export</h2>
+  <div class="row">
+    <div>
+      <label for="exportDefaultLimit">Default max results per export</label>
+      <input id="exportDefaultLimit" type="number" min="1" max="2500">
+    </div>
+    <div>
+      <label for="exportPageDelayMinMs">Delay between pages, min (ms)</label>
+      <input id="exportPageDelayMinMs" type="number" min="0" max="120000">
+    </div>
+    <div>
+      <label for="exportPageDelayMaxMs">Delay between pages, max (ms)</label>
+      <input id="exportPageDelayMaxMs" type="number" min="0" max="120000">
+    </div>
+  </div>
+  <div class="muted">LinkedIn shows at most 100 pages × 25 = 2,500 results per search. Split larger searches with filters. Exports also respect the daily cap below.</div>
+
+  <div class="warn">LinkedIn restricts accounts that capture too aggressively. Community guidance is 50 to 100 profiles per day per account. The default cap is 100. Bulk capture from Sales Navigator search pages is the most-restricted pattern.</div>
+
+  <div class="actions">
+    <button id="save">Save</button>
+    <button id="test" class="secondary">Send test event</button>
+    <span id="status"></span>
+  </div>
+</main>
+<footer>Built and maintained by <a href="https://deepline.com/?utm_source=linkedin-webhook-exporter" target="_blank" rel="noopener">Deepline</a>. MIT licensed. Sends data only to the webhook you configure.</footer>
+<script type="module" src="options.js"></script>
+</body>
+</html>
