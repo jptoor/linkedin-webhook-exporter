@@ -40,10 +40,11 @@ async function getSettings(): Promise<Settings> {
 async function setupSinglePage(pageType: PageType): Promise<void> {
   const panel = mountPanel(document, "LinkedIn Webhook Exporter", "Send to webhook", "Resend");
   panel.secondary.textContent = "Force resend";
-  const settings = await getSettings();
+  // Attach handlers before any async work so an early click is never lost.
   const doSend = async (force: boolean) => {
     panel.primary.disabled = true;
     panel.setStatus("Reading page…");
+    const settings = await getSettings();
     const { leads } = parsePage(document, location.href, { includeExperience: settings.includeExperience, includeEducation: settings.includeEducation, includeAbout: settings.includeAbout });
     const lead = leads[0];
     if (!lead || !lead.full_name) {
