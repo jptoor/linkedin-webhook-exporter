@@ -76,7 +76,7 @@ export class MockWebhook {
 
 import { pagedSalesNav, delayedSalesNav, sampleName, PAGED_TOTAL as GEN_TOTAL, PAGED_PAGES as GEN_PAGES } from "../fixtures/generators.mjs";
 /** Name as the parser will emit it: trailing badges/emoji stripped. */
-export const cleanSampleName = (n: number) => sampleName(n).replace(/\s+is reachable$/, "").replace(/\s*[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]+(?=\s|$)/gu, "").replace(/\s+/g, " ").trim();
+export const cleanSampleName = (n: number) => sampleName(n).replace(/\s+is reachable$/, "");
 export const PAGED_TOTAL = GEN_TOTAL;
 export const PAGED_PAGES = GEN_PAGES;
 const SAMPLES = resolve(__dirname, "../../samples");

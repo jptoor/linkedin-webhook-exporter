@@ -192,8 +192,17 @@ export function parseSalesNavLead(doc: Document, pageUrl: string, now = new Date
   const degreeEl = nameEl ? Array.from(nameEl.parentElement?.parentElement?.querySelectorAll<HTMLElement>("span") ?? []).find((s) => /^[·•]?\s*(1st|2nd|3rd)\b/.test((s.textContent ?? "").trim())) : null;
   lead.connection_degree = parseConnectionDegree(text(degreeEl ?? firstMatch(doc, ['span[class*="degree"]', '[data-lwe="degree-badge"]'])));
   if (!lead.connection_degree) warn(lead, "degree_missing");
-  lead.sales_navigator_url = canonicalizeSalesNavUrl(pageUrl);
-  lead.linkedin_member_urn = memberUrnFromSalesNavUrl(pageUrl);
+  // The page's own URL was already checked by the worker (LinkedIn host, or
+  // loopback in the test build), so derive the identity from its path.
+  const ownPath = (() => {
+    try {
+      return new URL(pageUrl).pathname;
+    } catch {
+      return pageUrl;
+    }
+  })();
+  lead.sales_navigator_url = canonicalizeSalesNavUrl(ownPath);
+  lead.linkedin_member_urn = memberUrnFromSalesNavUrl(ownPath);
   const publicLink = firstMatch(doc, ['a[href*="linkedin.com/in/"]', 'a[href^="/in/"]', '[data-lwe="public-profile"]']);
   lead.linkedin_url = canonicalizeLinkedInUrl(attr(publicLink, "href"));
   lead.linkedin_slug = slugFromCanonical(lead.linkedin_url);

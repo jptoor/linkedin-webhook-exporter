@@ -307,11 +307,12 @@ async function commitJob(expected: ExportJob, next: ExportJob): Promise<{ ok: bo
     const current = await loadJob();
     if (!current || current.id !== expected.id || current.rev !== expected.rev) return { ok: false, current };
     const saved = { ...next, rev: expected.rev + 1 };
+    if (saved.pagesDone !== expected.pagesDone) {
+      await logEvent("export.page", `Export page ${saved.pagesDone} done (${saved.collected} collected, ${saved.sent} sent)`, { jobId: saved.id, page: saved.pagesDone, collected: saved.collected, sent: saved.sent, skipped: saved.skipped });
+    }
     if (saved.status !== expected.status) {
       const kind = saved.status === "paused" ? "export.paused" : saved.status === "running" ? "export.resumed" : saved.status === "stopped" ? "export.stopped" : saved.status === "error" ? "export.failed" : "export.finished";
       await logEvent(kind, `Export ${saved.status}${saved.stopReason ? ` (${saved.stopReason})` : ""}${saved.lastError ? `: ${saved.lastError}` : ""}`, { jobId: saved.id, pagesDone: saved.pagesDone, collected: saved.collected, sent: saved.sent, skipped: saved.skipped, reason: saved.stopReason });
-    } else if (saved.pagesDone !== expected.pagesDone) {
-      await logEvent("export.page", `Export page ${saved.pagesDone} done (${saved.collected} collected, ${saved.sent} sent)`, { jobId: saved.id, page: saved.pagesDone, collected: saved.collected, sent: saved.sent, skipped: saved.skipped });
     }
     if (isActive(saved)) await chrome.storage.local.set({ [KEYS.exportJob]: saved });
     else {

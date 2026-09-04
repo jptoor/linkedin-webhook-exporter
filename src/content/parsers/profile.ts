@@ -6,6 +6,15 @@ export function isProfilePath(pathname: string): boolean {
   return /^\/in\/[^/]+\/?$/.test(pathname);
 }
 
+/** Path of the page's own URL (the worker already verified its host). */
+function safePath(url: string): string {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return url;
+  }
+}
+
 export interface ProfileParseOptions {
   includeExperience?: boolean;
   includeEducation?: boolean;
@@ -74,7 +83,7 @@ function parseProfileClassic(doc: Document, pageUrl: string, opts: ProfileParseO
   if (!lead.location) warn(lead, "location_missing");
   lead.connection_degree = parseConnectionDegree(text(firstMatch(doc, ['[data-lwe="degree-badge"]', ".dist-value", "span.distance-badge"])));
   if (!lead.connection_degree) warn(lead, "degree_missing");
-  lead.linkedin_url = canonicalizeLinkedInUrl(pageUrl) ?? canonicalizeLinkedInUrl(attr(doc.querySelector('link[rel="canonical"]'), "href"));
+  lead.linkedin_url = canonicalizeLinkedInUrl(pageUrl) ?? canonicalizeLinkedInUrl(attr(doc.querySelector('link[rel="canonical"]'), "href")) ?? canonicalizeLinkedInUrl(safePath(pageUrl));
   lead.linkedin_slug = slugFromCanonical(lead.linkedin_url);
   const img = firstMatch(doc, ['img[data-lwe="photo"]', "main img.pv-top-card-profile-picture__image--show", "main img.pv-top-card-profile-picture__image", 'main img[alt$="profile photo"]', "main .pv-top-card img"]);
   lead.profile_image_url = attr(img, "src");
@@ -260,7 +269,7 @@ function parseProfileSdui(doc: Document, pageUrl: string, opts: ProfileParseOpti
   }
   const companyLine = rest.length >= 3 && rest[1] !== lead.location ? rest[1] : null;
 
-  lead.linkedin_url = canonicalizeLinkedInUrl(pageUrl) ?? canonicalizeLinkedInUrl(attr(doc.querySelector('link[rel="canonical"]'), "href"));
+  lead.linkedin_url = canonicalizeLinkedInUrl(pageUrl) ?? canonicalizeLinkedInUrl(attr(doc.querySelector('link[rel="canonical"]'), "href")) ?? canonicalizeLinkedInUrl(safePath(pageUrl));
   lead.linkedin_slug = slugFromCanonical(lead.linkedin_url);
   const imgs = Array.from(top.querySelectorAll<HTMLImageElement>("img")).filter((i) => !/cover|banner|logo/i.test(i.alt ?? ""));
   const img = imgs.find((i) => lead.full_name && (i.alt ?? "").includes(lead.full_name)) ?? imgs.find((i) => /profile|photo|foto/i.test(i.alt ?? "")) ?? null;

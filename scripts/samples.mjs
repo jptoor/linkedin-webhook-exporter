@@ -17,7 +17,7 @@ const routes = [
   [/^\/sales\/lists\/people\//, "salesnav-list.html"],
   [/^\/sales\/lead\//, "salesnav-lead.html"]
 ];
-createServer((req, res) => {
+const server = createServer((req, res) => {
   const u = new URL(req.url ?? "/", "http://x");
   if (/^\/sales\/search\/people/.test(u.pathname)) {
     const page = Number(u.searchParams.get("page") ?? "1");
@@ -28,4 +28,5 @@ createServer((req, res) => {
   const file = hit ? resolve(dir, hit[1]) : null;
   if (!file || !existsSync(file)) return res.writeHead(404).end("no sample for " + u.pathname);
   res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(readFileSync(file));
-}).listen(PORT, "127.0.0.1", () => console.log(`samples on http://127.0.0.1:${PORT}/  (load dist-test/ as an unpacked extension)`));
+});
+server.listen(PORT, "127.0.0.1", () => console.log(`samples on http://127.0.0.1:${server.address().port}/  (load dist-test/ as an unpacked extension)`));

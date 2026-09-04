@@ -18,7 +18,8 @@
     "pack": "npm run build && node scripts/pack.mjs",
     "samples": "node scripts/samples.mjs",
     "lint": "eslint src tests scripts receiver --ext .ts,.mts,.mjs",
-    "check": "npm run typecheck && npm run lint && npm test"
+    "check": "npm run typecheck && npm run lint && npm test",
+    "e2e": "npm run build:test && node scripts/e2e-samples.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
