@@ -68,11 +68,10 @@ export function appendedSalesNav(page) {
       const wasDisabled = next.disabled; next.disabled = true; next.setAttribute('data-was-disabled', String(wasDisabled));
       const box = document.querySelector('#search-results-container');
       let done = false;
-      box.addEventListener('scroll', () => {
-        if (done || box.scrollTop + box.clientHeight < box.scrollHeight - 40) return;
-        done = true;
-        setTimeout(() => { late.forEach(r => ol.appendChild(r)); next.disabled = wasDisabled; }, 300);
-      });
+      const release = () => { if (done) return; done = true; setTimeout(() => { late.forEach(r => ol.appendChild(r)); next.disabled = wasDisabled; }, 300); };
+      box.addEventListener('scroll', () => { if (box.scrollTop + box.clientHeight >= box.scrollHeight - 40) release(); });
+      // A page too short to scroll (e.g. the last one) releases its rows on its own, like a real lazy list that finishes loading.
+      if (box.scrollHeight <= box.clientHeight + 10) setTimeout(release, 200);
     });
   </script>`;
   return html.replace("</head>", script + "</head>");
