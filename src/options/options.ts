@@ -1,4 +1,4 @@
-import { getSettings, originPattern, saveSettings, validateWebhookUrl } from "../shared/settings";
+import { getSettings, originPattern, saveSettings, validateHeader, validateWebhookUrl } from "../shared/settings";
 import type { Settings } from "../shared/types";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -76,23 +76,67 @@ async function ensureHostPermission(url: string): Promise<boolean> {
   }
 }
 
+/** One validation + authorization path shared by Save and Test (audit SEC-04). */
+async function validateAndAuthorize(patch: Partial<Settings>): Promise<{ ok: boolean; reason: string | null }> {
+  if (!patch.webhookUrl) return { ok: true, reason: null };
+  const v = validateWebhookUrl(patch.webhookUrl);
+  if (!v.ok) return v;
+  const h = validateHeader(patch.authHeaderName ?? "", patch.authHeaderValue ?? "");
+  if (!h.ok) return h;
+  if ((patch.exportPageDelayMinMs ?? 0) > (patch.exportPageDelayMaxMs ?? 0)) return { ok: false, reason: "Minimum page delay must not exceed the maximum" };
+  const granted = await ensureHostPermission(patch.webhookUrl);
+  if (!granted) return { ok: false, reason: "Permission to contact that host was not granted." };
+  return { ok: true, reason: null };
+}
+
 $("save").addEventListener("click", async () => {
   const patch = read();
-  if (patch.webhookUrl) {
-    const v = validateWebhookUrl(patch.webhookUrl);
-    if (!v.ok) return setStatus(v.reason ?? "Invalid URL", "err");
-    const granted = await ensureHostPermission(patch.webhookUrl);
-    if (!granted) return setStatus("Permission to contact that host was not granted.", "err");
-  }
+  const v = await validateAndAuthorize(patch);
+  if (!v.ok) return setStatus(v.reason ?? "Invalid settings", "err");
   await saveSettings(patch);
   setStatus("Saved.", "ok");
 });
 
 $("test").addEventListener("click", async () => {
-  await saveSettings(read());
+  const patch = read();
+  const v = await validateAndAuthorize(patch);
+  if (!v.ok) return setStatus(v.reason ?? "Invalid settings", "err");
+  if (!patch.webhookUrl) return setStatus("Enter a webhook URL first.", "err");
+  // Test with the current form values, without persisting a failed configuration.
+  const previous = await getSettings();
+  await saveSettings(patch);
   setStatus("Sending test event…");
   const r = (await chrome.runtime.sendMessage({ type: "TEST_WEBHOOK" })) as { ok: boolean; status: number | null; error: string | null };
-  setStatus(r.ok ? `Webhook responded ${r.status}.` : `Failed: ${r.error ?? "unknown error"}`, r.ok ? "ok" : "err");
+  if (!r.ok) await saveSettings(previous);
+  setStatus(r.ok ? `Webhook responded ${r.status}. Saved.` : `Failed: ${r.error ?? "unknown error"} (settings not saved)`, r.ok ? "ok" : "err");
 });
 
 getSettings().then(render);
+
+/* ---------- activity log ---------- */
+type LogEntry = { t: number; kind: string; msg: string; data?: Record<string, unknown> };
+async function loadLog(limit = 1000): Promise<LogEntry[]> {
+  const r = (await chrome.runtime.sendMessage({ type: "GET_LOG", limit })) as LogEntry[];
+  return Array.isArray(r) ? r : [];
+}
+async function renderLog() {
+  const entries = await loadLog(100);
+  $("logPreview").textContent = entries.map((e) => `${new Date(e.t).toISOString()}  ${e.kind.padEnd(18)} ${e.msg}${e.data ? "  " + JSON.stringify(e.data) : ""}`).join("\n") || "No activity yet.";
+}
+$("downloadLog").addEventListener("click", async () => {
+  const entries = await loadLog(1000);
+  const blob = new Blob([JSON.stringify({ exported_at: new Date().toISOString(), entries }, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `linkedin-webhook-exporter-log-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.json`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+});
+$("clearLog").addEventListener("click", async () => {
+  await chrome.runtime.sendMessage({ type: "CLEAR_LOG" });
+  $("logStatus").textContent = "Cleared.";
+  void renderLog();
+});
+void renderLog();
+if (location.hash === "#log") document.getElementById("log")?.scrollIntoView();

@@ -81,6 +81,38 @@ $("exportPause").addEventListener("click", async () => {
 });
 $("exportStop").addEventListener("click", async () => renderExport((await chrome.runtime.sendMessage({ type: "EXPORT_STOP" })) as ExportStatusResponse));
 
+function fmtTime(t: number): string {
+  const d = new Date(t);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`;
+}
+async function refreshLog() {
+  const entries = (await chrome.runtime.sendMessage({ type: "GET_LOG", limit: 15 })) as Array<{ t: number; kind: string; msg: string }>;
+  const ul = $("log");
+  ul.textContent = "";
+  if (!Array.isArray(entries) || !entries.length) {
+    const li = document.createElement("li");
+    li.className = "muted";
+    li.textContent = "No activity yet.";
+    ul.appendChild(li);
+    return;
+  }
+  for (const e of entries) {
+    const li = document.createElement("li");
+    const k = document.createElement("span");
+    k.className = "k";
+    k.textContent = e.kind;
+    const t = document.createElement("span");
+    t.className = "t";
+    t.textContent = fmtTime(e.t);
+    li.append(k, document.createTextNode(e.msg), t);
+    ul.appendChild(li);
+  }
+}
+$("openLog").addEventListener("click", (e) => {
+  e.preventDefault();
+  chrome.tabs.create({ url: chrome.runtime.getURL("options.html#log") });
+});
+
 async function refresh() {
   render((await chrome.runtime.sendMessage({ type: "GET_STATE" })) as StateResponse);
 }
@@ -93,6 +125,7 @@ $("retry").addEventListener("click", async () => render((await chrome.runtime.se
 $("clear").addEventListener("click", async () => render((await chrome.runtime.sendMessage({ type: "CLEAR_QUEUE", status: "all" })) as StateResponse));
 void refresh();
 void refreshExport();
+void refreshLog();
 void prefillExport();
 chrome.runtime.sendMessage({ type: "GET_SETTINGS" }).then((s: { exportDefaultLimit?: number }) => {
   ($("exportLimit") as HTMLInputElement).value = String(s?.exportDefaultLimit ?? 500);
@@ -100,4 +133,5 @@ chrome.runtime.sendMessage({ type: "GET_SETTINGS" }).then((s: { exportDefaultLim
 setInterval(() => {
   void refresh();
   void refreshExport();
+  void refreshLog();
 }, 2000);

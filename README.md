@@ -8,9 +8,17 @@ lead pages) and POSTs it as signed JSON to one webhook you control: a
 [Deepline](https://deepline.com) play, a Clay table, Zapier / Make / n8n, or
 the bundled SQLite receiver.
 
-It does the capture and route layers that ZoomInfo, Apollo, Lusha, Exportly
-and ClayGenies sell, and leaves email/phone reveal to your receiver. No
-account, no server, no telemetry. Settings live in your browser profile only.
+It does the capture and route layers that commercial LinkedIn extensions
+sell, and leaves email/phone reveal to your receiver. No account, no server,
+no telemetry. Settings live in your browser profile only.
+
+> **Read before using.** LinkedIn's [User Agreement](https://www.linkedin.com/legal/user-agreement)
+> prohibits browser extensions that scrape or automate its service, and
+> LinkedIn [restricts accounts](https://www.linkedin.com/help/linkedin/answer/a1341387)
+> that use them. This tool reads only what your browser already renders and
+> acts only when you click, but **no daily cap, delay, or dedupe setting makes
+> that compliant or prevents a restriction.** Use it where you have the right
+> to, at your own risk, with your own LinkedIn account. See [PRIVACY.md](PRIVACY.md).
 
 - **One click** on a profile, **multi-select** on list pages.
 - **Export a whole search**: paste a Sales Navigator search or list URL (or click "Export all" on the page) and every page is walked up to your limit, LinkedIn's 2,500 cap, or your daily cap, with pause/stop. Same flow as Wiza, Prospeo, lemlist and Exportly, minus their cloud.
@@ -20,7 +28,8 @@ account, no server, no telemetry. Settings live in your browser profile only.
   [Standard Webhooks](https://www.standardwebhooks.com) (Deepline / Svix native).
 - **Idempotent**: `Idempotency-Key` and `x-deepline-dedupe-key` are the lead's
   identity, retries re-send byte-identical bodies, receivers can dedupe safely.
-- **Guardrails**: local dedupe, daily cap (default 100), no automation.
+- **Guardrails**: local dedupe, daily cap (default 100, hard max 2,000), paced bulk export. These are conveniences, not compliance.
+- **Activity log**: every capture, send, retry, export step, settings change and error is recorded locally (last 1,000 entries, secrets redacted) and can be downloaded as JSON.
 - **Saved searches + import audit**: "Save search" sends the Sales Navigator query (decoded filters, keywords, result count) as `search.captured`; every lead carries who imported it, when, and from which search or list, ready for a `sales_nav_imports` table.
 
 Docs: [`docs/SPEC.md`](docs/SPEC.md) · [`docs/ACCEPTANCE_TESTS.md`](docs/ACCEPTANCE_TESTS.md) · [`docs/RESEARCH.md`](docs/RESEARCH.md) · [`examples/deepline`](examples/deepline)
@@ -53,12 +62,22 @@ Click **Send test event** to verify the endpoint.
 ## Try it locally in 60 seconds
 
 ```sh
-LWE_SECRET=topsecret npm run receiver        # http://localhost:8787/hook, writes leads.sqlite
+LWE_SECRET=topsecret LWE_ADMIN_TOKEN=admin npm run receiver   # 127.0.0.1:8787, writes leads.sqlite
+npm run build:test && npm run samples                          # sample LinkedIn-shaped pages on 127.0.0.1:8790
 ```
 
-Set the webhook URL to `http://localhost:8787/hook`, secret `topsecret`,
-scheme LWE. Open any LinkedIn profile, click **Send to webhook**, then
-`curl localhost:8787/leads`.
+Load `dist-test/` as an unpacked extension, set the webhook URL to
+`http://127.0.0.1:8787/hook`, secret `topsecret`, scheme LWE. Open a sample
+page (or any LinkedIn profile with the production build), click **Send to
+webhook**, then:
+
+```sh
+curl -H 'Authorization: Bearer admin' localhost:8787/leads
+```
+
+The receiver binds to loopback, refuses to start without a secret unless
+`LWE_ALLOW_UNSIGNED=1`, and only serves `/leads`, `/searches`, `/imports` when
+`LWE_ADMIN_TOKEN` is set. It is a reference, not a production service.
 
 ## Export a whole Sales Navigator search
 
@@ -127,11 +146,28 @@ npm run test:acceptance  # Playwright: real extension in Chromium against fixtur
 ## Safety and compliance
 
 The extension only reads what LinkedIn renders to you and only acts on a
-click. LinkedIn's terms prohibit automated access; community-reported
-restriction thresholds are around 50 to 100 captures per day. Keep the daily
-cap conservative, prefer profile-page capture over bulk Sales Navigator
-capture, and make sure you have a lawful basis for processing the people you
-capture. You are responsible for how you use this tool.
+click (bulk export runs one page at a time after an explicit start, with a
+visible pause/stop). LinkedIn's terms prohibit scraping and automation by
+extensions regardless of pace; keep the daily cap low, prefer profile-page
+capture over bulk Sales Navigator capture, and make sure you have a lawful
+basis for processing the people you capture. Nothing here is a safe harbor.
+You are responsible for how you use this tool.
+
+Detection surface, for the record: no `cookies` permission, no injected
+`<script src="chrome-extension://…">`, no request interception, no
+unsolicited fetches to LinkedIn, panel UI in a shadow root, and every click is
+a real user click.
+
+## Sample pages, tests, audit
+
+- `npm run samples` serves static pages for every supported surface (classic
+  and 2026 layouts, messy names, delayed rows, grouped experience) at
+  LinkedIn-shaped paths for manual testing with the test build.
+- `npm test` (unit) and `npm run test:acceptance` (real extension in
+  Chromium) cover the parsers, delivery, export lifecycle, receiver, and the
+  edge cases in `samples/`.
+- `docs/AUDIT.md` is an independent audit; `docs/AUDIT-STATUS.md` tracks the
+  fix for each finding.
 
 ## License
 

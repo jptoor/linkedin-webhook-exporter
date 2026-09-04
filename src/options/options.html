@@ -120,6 +120,15 @@
 
   <div class="warn">LinkedIn restricts accounts that capture too aggressively. Community guidance is 50 to 100 profiles per day per account. The default cap is 100. Bulk capture from Sales Navigator search pages is the most-restricted pattern.</div>
 
+  <h2 id="log">Activity log</h2>
+  <div class="muted">Every capture, send, retry, export step, settings change and error is recorded locally (last 1,000 entries, no secrets). Nothing is uploaded.</div>
+  <div class="actions" style="margin-top:10px">
+    <button id="downloadLog" class="secondary">Download log (JSON)</button>
+    <button id="clearLog" class="secondary">Clear log</button>
+    <span id="logStatus" class="muted"></span>
+  </div>
+  <pre id="logPreview" style="max-height:260px; overflow:auto; background:#f6f8fa; border:1px solid #d0d7de; border-radius:8px; padding:10px; font-size:11px; margin-top:10px"></pre>
+
   <div class="actions">
     <button id="save">Save</button>
     <button id="test" class="secondary">Send test event</button>

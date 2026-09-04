@@ -14,16 +14,24 @@
     "test:unit": "vitest run",
     "test:acceptance": "npm run build:test && playwright test",
     "receiver": "node receiver/server.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "pack": "npm run build && node scripts/pack.mjs",
+    "samples": "node scripts/samples.mjs",
+    "lint": "eslint src tests scripts receiver --ext .ts,.mts,.mjs",
+    "check": "npm run typecheck && npm run lint && npm test"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
     "@playwright/test": "^1.62.1",
     "@types/chrome": "^0.2.8",
     "@types/jsdom": "^30.0.0",
     "esbuild": "^0.28.2",
+    "eslint": "^9.39.5",
+    "globals": "^17.12.0",
     "jsdom": "^29.1.1",
     "tsx": "^4.23.13",
-    "typescript": "^7.0.2",
+    "typescript": "5.9",
+    "typescript-eslint": "^8.69.0",
     "vitest": "^4.1.11"
   }
 }

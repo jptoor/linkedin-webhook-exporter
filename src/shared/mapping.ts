@@ -1,34 +1,42 @@
-import type { BatchPayload, ImportInfo, LeadRecord, MappingPreset, Payload, SearchPayload, SearchRecord, SinglePayload, SourceInfo } from "./types";
+import type { BatchPayload, EventName, ImportInfo, LeadRecord, MappingPreset, Payload, SearchPayload, SearchRecord, SinglePayload, SourceInfo } from "./types";
+import { EVENT_NAMES, SCHEMA_VERSION } from "./types";
 
-/** Flatten one lead + source + custom fields into a single-level object.
- *  Suitable for Clay, Zapier, Make and spreadsheet-style receivers that key
- *  columns by top-level property name. */
+/** Every body, in every preset, starts with the same envelope fields so
+ *  receivers can branch on `event` and negotiate on `schema_version`. */
+function envelope(event: EventName, eventId: string, sentAt: string) {
+  return { schema_version: SCHEMA_VERSION, event, event_id: eventId, sent_at: sentAt };
+}
+
+export function flattenSource(source: SourceInfo): Record<string, unknown> {
+  return { page_type: source.page_type, page_url: source.page_url, captured_by: source.captured_by, extension_version: source.version };
+}
+
 export function flattenImport(imp: ImportInfo | null | undefined): Record<string, unknown> {
   if (!imp) return {};
   return { import_id: imp.import_id, imported_by: imp.imported_by, imported_at: imp.imported_at, import_kind: imp.import_kind, import_search_url: imp.search_url, import_search_name: imp.search_name, import_list_id: imp.list_id, import_page: imp.page };
-}
-
-export function flattenLead(lead: LeadRecord, source: SourceInfo, custom: Record<string, string>, eventId: string, sentAt: string, imp: ImportInfo | null = null): Record<string, unknown> {
-  const { experience, education, ...rest } = lead;
-  return {
-    event_id: eventId,
-    sent_at: sentAt,
-    ...rest,
-    experience_json: experience.length ? JSON.stringify(experience) : null,
-    education_json: education.length ? JSON.stringify(education) : null,
-    page_type: source.page_type,
-    page_url: source.page_url,
-    captured_by: source.captured_by,
-    extension_version: source.version,
-    ...flattenImport(imp),
-    ...prefixCustom(custom)
-  };
 }
 
 function prefixCustom(custom: Record<string, string>): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(custom)) out[k.startsWith("custom_") ? k : `custom_${k}`] = v;
   return out;
+}
+
+/** Flatten one lead + source + custom fields into a single-level object.
+ *  Suitable for Clay, Zapier, Make and spreadsheet-style receivers that key
+ *  columns by top-level property name. */
+export function flattenLead(lead: LeadRecord, source: SourceInfo, custom: Record<string, string>, eventId: string, sentAt: string, imp: ImportInfo | null = null): Record<string, unknown> {
+  const { experience, education, parse_warnings, ...rest } = lead;
+  return {
+    ...envelope("lead.captured", eventId, sentAt),
+    ...rest,
+    experience_json: experience.length ? JSON.stringify(experience) : null,
+    education_json: education.length ? JSON.stringify(education) : null,
+    parse_warnings: parse_warnings.length ? parse_warnings.join(",") : null,
+    ...flattenSource(source),
+    ...flattenImport(imp),
+    ...prefixCustom(custom)
+  };
 }
 
 /** Deepline preset: flat record using the field names Deepline's people
@@ -41,8 +49,7 @@ function prefixCustom(custom: Record<string, string>): Record<string, string> {
 export function toDeeplineRow(lead: LeadRecord, source: SourceInfo, custom: Record<string, string>, eventId: string, sentAt: string, imp: ImportInfo | null = null): Record<string, unknown> {
   const flat = flattenLead(lead, source, custom, eventId, sentAt, imp);
   return {
-    // Canonical Deepline play-input names first (prebuilt/person-linkedin-to-email,
-    // prebuilt/name-and-domain-to-email-waterfall key on these).
+    ...envelope("lead.captured", eventId, sentAt),
     linkedin_url: lead.linkedin_url,
     first_name: lead.first_name,
     last_name: lead.last_name,
@@ -76,7 +83,7 @@ export function buildBodies(leads: LeadRecord[], opts: BuildOptions): Array<{ ev
     return leads.map((lead) => {
       const eventId = opts.eventId();
       if (preset === "generic") {
-        const body: SinglePayload = { schema_version: "1", event: "lead.captured", event_id: eventId, sent_at: sentAt, source, lead, import: imp, custom };
+        const body: SinglePayload = { ...envelope("lead.captured", eventId, sentAt), event: "lead.captured", source, lead, import: imp, custom };
         return { eventId, body, leads: [lead] };
       }
       return { eventId, body: rowFor(lead, eventId), leads: [lead] };
@@ -85,11 +92,13 @@ export function buildBodies(leads: LeadRecord[], opts: BuildOptions): Array<{ ev
 
   const eventId = opts.eventId();
   if (preset === "generic") {
-    const body: BatchPayload = { schema_version: "1", event: "leads.captured", event_id: eventId, sent_at: sentAt, source, leads, import: imp, custom };
+    const body: BatchPayload = { ...envelope("leads.captured", eventId, sentAt), event: "leads.captured", source, leads, import: imp, custom };
     return [{ eventId, body, leads }];
   }
-  // Flat / Deepline batch: an envelope with a `rows` array of flat records.
-  return [{ eventId, body: { event: "leads.captured", event_id: eventId, sent_at: sentAt, ...flattenImport(imp), rows: leads.map((l) => rowFor(l, eventId)) }, leads }];
+  // Flat / Deepline batch: a versioned envelope with a `rows` array of flat
+  // records; source/import/custom are repeated on the envelope for receivers
+  // that only look at the top level.
+  return [{ eventId, body: { ...envelope("leads.captured", eventId, sentAt), ...flattenSource(source), ...flattenImport(imp), ...prefixCustom(custom), rows: leads.map((l) => rowFor(l, eventId)) }, leads }];
 }
 
 /** Body for a saved search. Generic keeps the envelope; flat and Deepline
@@ -97,24 +106,23 @@ export function buildBodies(leads: LeadRecord[], opts: BuildOptions): Array<{ ev
  *  Clay/Zapier receiver can branch on it and hand the URL to a provider. */
 export function buildSearchBody(search: SearchRecord, preset: MappingPreset, source: SourceInfo, custom: Record<string, string>, eventId: string, sentAt: string): unknown {
   if (preset === "generic") {
-    const body: SearchPayload = { schema_version: "1", event: "search.captured", event_id: eventId, sent_at: sentAt, source, search, custom };
+    const body: SearchPayload = { ...envelope("search.captured", eventId, sentAt), event: "search.captured", source, search, custom };
     return body;
   }
   const { params, filters, ...rest } = search;
   return {
-    event: "search.captured",
-    event_id: eventId,
-    sent_at: sentAt,
+    ...envelope("search.captured", eventId, sentAt),
     ...rest,
     params_json: JSON.stringify(params),
     filters_json: JSON.stringify(filters),
-    source_page_url: source.page_url,
-    captured_by: source.captured_by,
-    extension_version: source.version,
-    ...Object.fromEntries(Object.entries(custom).map(([k, v]) => [k.startsWith("custom_") ? k : `custom_${k}`, v]))
+    ...flattenSource(source),
+    ...prefixCustom(custom)
   };
 }
 
-export function isPayload(x: unknown): x is Payload {
-  return !!x && typeof x === "object" && (x as Payload).schema_version === "1";
+/** True when `x` carries the versioned envelope every preset emits. */
+export function isPayload(x: unknown): x is Payload | Record<string, unknown> {
+  if (!x || typeof x !== "object") return false;
+  const o = x as Record<string, unknown>;
+  return o.schema_version === SCHEMA_VERSION && typeof o.event === "string" && (EVENT_NAMES as readonly string[]).includes(o.event) && typeof o.event_id === "string";
 }

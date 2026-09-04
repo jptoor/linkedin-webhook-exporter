@@ -74,28 +74,12 @@ export class MockWebhook {
   }
 }
 
-export const PAGED_TOTAL = 60;
-export const PAGED_PAGES = 3;
-export function pagedSalesNav(page: number): string {
-  const start = (page - 1) * 25;
-  const count = Math.max(0, Math.min(25, PAGED_TOTAL - start));
-  const rows = Array.from({ length: count }, (_, i) => {
-    const n = start + i + 1;
-    return `<li class="artdeco-list__item">
-      <a data-anonymize="person-name" href="/sales/lead/ACwAAA${String(n).padStart(4, "0")},NAME_SEARCH,x${n}"><span aria-hidden="true">Lead ${n}</span></a>
-      <span data-anonymize="title">Title ${n}</span>
-      <a data-anonymize="company-name" href="/sales/company/${1000 + n}">Company ${n}</a>
-      <span data-anonymize="location">City ${n}</span>
-    </li>`;
-  }).join("\n");
-  const last = page >= PAGED_PAGES;
-  return `<!doctype html><html><head><meta charset="utf-8"><title>Paged</title></head><body>
-  <h2 data-lwe="results-count">${PAGED_TOTAL} results</h2>
-  <div id="search-results-container"><ol class="artdeco-list">${rows}</ol></div>
-  <button aria-label="Previous" ${page <= 1 ? "disabled" : ""}>Prev</button>
-  <button aria-label="Next" ${last ? "disabled" : ""}>Next</button>
-  </body></html>`;
-}
+import { pagedSalesNav, delayedSalesNav, sampleName, PAGED_TOTAL as GEN_TOTAL, PAGED_PAGES as GEN_PAGES } from "../fixtures/generators.mjs";
+/** Name as the parser will emit it: trailing badges/emoji stripped. */
+export const cleanSampleName = (n: number) => sampleName(n).replace(/\s+is reachable$/, "").replace(/\s*[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]+(?=\s|$)/gu, "").replace(/\s+/g, " ").trim();
+export const PAGED_TOTAL = GEN_TOTAL;
+export const PAGED_PAGES = GEN_PAGES;
+const SAMPLES = resolve(__dirname, "../../samples");
 
 export class FixtureSite {
   server!: Server;
@@ -114,6 +98,17 @@ export class FixtureSite {
       if (/^\/sales\/search\/people/.test(path) && u.searchParams.get("query") === "paged") {
         return res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(pagedSalesNav(Number(u.searchParams.get("page") ?? "1")));
       }
+      if (/^\/sales\/search\/people/.test(path) && u.searchParams.get("query") === "delayed") {
+        return res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(delayedSalesNav(Number(u.searchParams.get("page") ?? "1")));
+      }
+      // Sample pages (2026 layouts, messy data) on LinkedIn-shaped paths.
+      const sample = [
+        [/^\/in\/zoe-angstrom/, "profile-sdui.html"],
+        [/^\/search\/results\/people\/?$/, u.searchParams.get("keywords") === "chief revenue officer" ? "people-search-sdui.html" : null],
+        [/^\/sales\/lists\/people\/7263/, "salesnav-list.html"],
+        [/^\/sales\/lead\//, "salesnav-lead.html"]
+      ].find(([re, f]) => f && (re as RegExp).test(path));
+      if (sample) return res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(readFileSync(resolve(SAMPLES, sample[1] as string)));
       const hit = routes.find(([re]) => re.test(path));
       if (!hit) return res.writeHead(404).end("no fixture");
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(readFileSync(resolve(FIXTURES, hit[1])));

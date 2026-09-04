@@ -1,0 +1,54 @@
+/** Generated fixtures shared by the sample site and the acceptance harness. */
+export const PAGED_TOTAL = 60;
+export const PAGED_PAGES = 3;
+
+const NAMES = ["Lead", "Zoë Ångström", "李 小龙", "José María de la Cruz", "Ayşe Öztürk 🚀", "O'Brien-Smith", "Nguyễn Văn An", "Владимир Петров", "Ẹ̀mí Adébáyọ̀", "Åsa Lindqvist"];
+
+/** Display name for row n (before badge stripping). */
+export function sampleName(n) {
+  const base = NAMES[n % NAMES.length];
+  return base === "Lead" ? `Lead ${n}` : `${base} ${n}`;
+}
+
+export function pagedSalesNav(page, opts = {}) {
+  const start = (page - 1) * 25;
+  const count = Math.max(0, Math.min(25, PAGED_TOTAL - start));
+  const rows = Array.from({ length: count }, (_, i) => {
+    const n = start + i + 1;
+    const name = sampleName(n);
+    return `<li class="artdeco-list__item">
+      <a data-anonymize="headshot-photo" href="/sales/lead/ACwAAA${String(n).padStart(4, "0")}abcdef,NAME_SEARCH,x${n}"><img data-anonymize="headshot-photo" src="https://media.licdn.com/dms/image/${n}.jpg" alt=""></a>
+      <a href="/sales/lead/ACwAAA${String(n).padStart(4, "0")}abcdef,NAME_SEARCH,x${n}"><span data-anonymize="person-name">${name}${n % 7 === 0 ? " is reachable" : ""}</span></a>
+      <span class="artdeco-entity-lockup__degree">· ${["1st", "2nd", "3rd"][n % 3]}</span>
+      <span data-anonymize="title">${n % 5 === 0 ? "Chief Revenue Officer (CRO)" : `Title ${n}`}</span>
+      ${n % 6 === 0 ? `<span data-anonymize="company-name">Stealth ${n}</span>` : `<a data-anonymize="company-name" href="/sales/company/${1000 + n}?_ntb=abc">Company ${n}</a>`}
+      <span data-anonymize="location">${n % 4 === 0 ? "Greater Paris Metropolitan Region" : `City ${n}, Country`}</span>
+    </li>`;
+  }).join("\n");
+  const last = page >= PAGED_PAGES;
+  return `<!doctype html><html><head><meta charset="utf-8"><title>Search | Sales Navigator</title>${opts.head ?? ""}</head><body>
+  <h2 data-lwe="results-count">${PAGED_TOTAL} results</h2>
+  <div id="search-results-container" style="height:600px;overflow-y:auto"><ol class="artdeco-list">${rows}</ol></div>
+  <button aria-label="Previous" ${page <= 1 ? "disabled" : ""}>Prev</button>
+  <button aria-label="Next" ${last ? "disabled" : ""}>Next</button>
+  </body></html>`;
+}
+
+/** Rows render as skeletons and materialize after a delay when scrolled,
+ *  like Sales Navigator's deferred rows. */
+export function delayedSalesNav(page) {
+  const html = pagedSalesNav(page);
+  const script = `<script>
+    // Replace rows with skeletons; restore each row 250ms after it intersects the viewport.
+    document.addEventListener('DOMContentLoaded', () => {
+      const rows = [...document.querySelectorAll('#search-results-container li')];
+      const real = rows.map(r => r.innerHTML);
+      rows.forEach((r, i) => { r.innerHTML = '<div class="dummy-text"></div>'; r.dataset.idx = i; });
+      const io = new IntersectionObserver(entries => {
+        for (const e of entries) if (e.isIntersecting) { const r = e.target; io.unobserve(r); setTimeout(() => { r.innerHTML = real[r.dataset.idx]; }, 250); }
+      }, { root: document.querySelector('#search-results-container') });
+      rows.forEach(r => io.observe(r));
+    });
+  </script>`;
+  return html.replace("</head>", script + "</head>");
+}

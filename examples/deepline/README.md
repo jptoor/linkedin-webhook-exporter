@@ -1,5 +1,11 @@
 # Deepline receiver
 
+0. Provision the audit table once (the play no longer runs DDL per event):
+
+   ```sh
+   deepline tools run query_customer_db --input "$(jq -n --arg sql "$(cat examples/deepline/migrations/001_sales_nav_imports.sql)" '{sql:$sql}')"
+   ```
+
 1. Create the signing secret (Standard Webhooks format, base64 with `whsec_` prefix):
 
    ```sh
@@ -47,8 +53,13 @@ or the bulk-export job id), `imported_by`, `imported_at`, `import_kind`
 Navigator keywords + filters, or the list id), `import_list_id`, `import_page`.
 
 The play writes one row per (import, lead) into the workspace warehouse table
-`sales.sales_nav_imports` through `query_customer_db`, so RevOps can answer
-"who imported what, when, from which search":
+`sales.sales_nav_imports` through `query_customer_db` **before** any paid
+enrichment step (status `received`), then updates it to `enriched` with the
+resolved URL and email. A failure mid-way leaves a visible `received` row to
+retry from; re-deliveries hit the same primary key. Input is validated at the
+entry point (event, event id grammar, URL shapes, bounded lengths). This is a
+reference, not a transactional guarantee across Deepline datasets and the
+warehouse. RevOps can answer "who imported what, when, from which search":
 
 ```sql
 SELECT imported_by, search_name, count(*) AS leads, min(imported_at) AS started

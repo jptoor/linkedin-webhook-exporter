@@ -13,12 +13,20 @@ export interface EducationEntry {
   date_range: string | null;
 }
 
-export type PageType =
-  | "profile"
-  | "people_search"
-  | "salesnav_search"
-  | "salesnav_list"
-  | "salesnav_lead";
+export type PageType = "profile" | "people_search" | "salesnav_search" | "salesnav_list" | "salesnav_lead";
+export const PAGE_TYPES: readonly PageType[] = ["profile", "people_search", "salesnav_search", "salesnav_list", "salesnav_lead"];
+
+/** Parser confidence signals. Receivers can route low-confidence records to review. */
+export type ParseWarning =
+  | "name_from_title"
+  | "headline_unsplit"
+  | "location_missing"
+  | "location_guessed"
+  | "company_missing"
+  | "degree_missing"
+  | "experience_grouping_uncertain"
+  | "sdui_layout"
+  | "name_fallback_key";
 
 export interface LeadRecord {
   full_name: string;
@@ -41,6 +49,8 @@ export interface LeadRecord {
   experience: ExperienceEntry[];
   education: EducationEntry[];
   captured_at: string;
+  /** Heuristic fields that could not be derived with confidence. */
+  parse_warnings: ParseWarning[];
 }
 
 export interface SourceInfo {
@@ -66,8 +76,12 @@ export interface ImportInfo {
   page: number | null;
 }
 
+export const SCHEMA_VERSION = "1" as const;
+export type EventName = "lead.captured" | "leads.captured" | "search.captured" | "test";
+export const EVENT_NAMES: readonly EventName[] = ["lead.captured", "leads.captured", "search.captured", "test"];
+
 export interface SinglePayload {
-  schema_version: "1";
+  schema_version: typeof SCHEMA_VERSION;
   event: "lead.captured";
   event_id: string;
   sent_at: string;
@@ -78,7 +92,7 @@ export interface SinglePayload {
 }
 
 export interface BatchPayload {
-  schema_version: "1";
+  schema_version: typeof SCHEMA_VERSION;
   event: "leads.captured";
   event_id: string;
   sent_at: string;
@@ -91,28 +105,25 @@ export interface BatchPayload {
 /** A saved search: everything a backend provider (Deepline play, Edges, Apify)
  *  needs to re-run the same Sales Navigator / LinkedIn search server-side. */
 export interface SearchRecord {
+  /** Search URL without page/session/tracking params. */
   search_url: string;
   page_type: PageType;
-  /** "sales_navigator" | "linkedin" */
   surface: "sales_navigator" | "linkedin";
-  /** Decoded query string parameters, e.g. query, keywords, sessionId, page. */
+  /** Decoded query parameters with session/tracking keys removed. */
   params: Record<string, string>;
   /** Sales Navigator's decoded `query` expression when present. */
   query_expression: string | null;
-  /** Free-text keywords when they can be extracted. */
   keywords: string | null;
   /** Filters parsed out of the Sales Navigator query expression, e.g. {"CURRENT_TITLE": ["CRO"]}. */
   filters: Record<string, string[]>;
-  /** LinkedIn's "1.5K+ results" header, when readable. */
   total_hint: number | null;
   page: number;
-  /** Lead list id for /sales/lists/people/<id>. */
   list_id: string | null;
   captured_at: string;
 }
 
 export interface SearchPayload {
-  schema_version: "1";
+  schema_version: typeof SCHEMA_VERSION;
   event: "search.captured";
   event_id: string;
   sent_at: string;
@@ -124,6 +135,7 @@ export interface SearchPayload {
 export type Payload = SinglePayload | BatchPayload | SearchPayload;
 
 export type MappingPreset = "generic" | "flat" | "deepline";
+export const MAPPING_PRESETS: readonly MappingPreset[] = ["generic", "flat", "deepline"];
 
 /** lwe: X-LWE-Signature over `${ts}.${body}` (hex). standard: Standard Webhooks
  *  (webhook-id / webhook-timestamp / webhook-signature, `v1,<base64>` over
@@ -154,6 +166,10 @@ export interface Settings {
   exportPageDelayMaxMs: number;
 }
 
+/** The subset of settings a content script is allowed to see. Secrets never
+ *  cross into a page-facing context. */
+export type ContentSettings = Pick<Settings, "includeExperience" | "includeEducation" | "includeAbout" | "exportDefaultLimit" | "dedupe" | "sendMode"> & { hasWebhook: boolean };
+
 export const DEFAULT_SETTINGS: Settings = {
   webhookUrl: "",
   signingSecret: "",
@@ -175,6 +191,17 @@ export const DEFAULT_SETTINGS: Settings = {
   exportPageDelayMaxMs: 9000
 };
 
+export const LIMITS = {
+  dailyCapMax: 2000,
+  dedupeTtlDaysMax: 365,
+  exportLimitMax: 2500,
+  pageDelayMaxMs: 120_000,
+  pageDelayMinFloorMs: 1000,
+  customFieldsMax: 20,
+  customValueMax: 500,
+  capturedByMax: 200
+} as const;
+
 export type QueueStatus = "pending" | "sending" | "sent" | "failed";
 
 export interface QueueItem {
@@ -188,12 +215,12 @@ export interface QueueItem {
   body: string;
   leadUrls: string[];
   leadCount: number;
-  /** Value for Idempotency-Key / x-deepline-dedupe-key. Profile identity for
-   *  single sends (so a re-capture dedupes downstream), event id for batches
-   *  and forced resends. */
+  /** Value for Idempotency-Key / x-deepline-dedupe-key. */
   dedupeKey: string;
   lastError: string | null;
   lastStatus: number | null;
+  /** When the item was claimed for sending; a stale lease is recovered. */
+  sendingAt: number | null;
 }
 
 export interface SendResult {

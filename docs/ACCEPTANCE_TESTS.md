@@ -48,6 +48,18 @@ Page delays are set to 100 to 200 ms through the options page.
 | AT-18 | Pause and resume | 1.5 s page delay | Pause after page 1, wait, resume | Pages done does not advance while paused; after resume the job finishes with 3 pages and 60 sent. | "pause and resume from the popup" |
 | AT-19 | Guardrails on start | No webhook; then a profile URL | Start export | "Configure a webhook first" and "not a Sales Navigator…" errors; zero requests. | "export refuses to start…" |
 
+### Audit remediation and messy inputs
+
+| ID | Criterion | Test |
+|---|---|---|
+| AT-20 | Same-path query change via `pushState`/`replaceState` remounts once; 20 route flips leave exactly one panel and 25 checkboxes | "navigating to a different query…" |
+| AT-21 | Rows that render 250 ms after intersecting are all captured by auto-scroll before an export page is parsed | "delayed lazy rows…" |
+| AT-22 | A lead list with no Next control exports one page and stops; Cyrillic, "Last, First", injected text, hostile company hosts, bad URNs handled; import carries the list id | "a lead list without a Next control…" |
+| AT-23 | 2026-layout profile and people search: emoji/credential names, mononyms, unicode slugs, hostile hosts, nested paths, warnings on payloads | "2026-layout profile and people search…" |
+| AT-24 | Every action appears in the activity log; neither the log nor page-visible settings contain the secret, auth header, or webhook host; popup shows the feed | "every action is logged…" |
+| AT-25 | Page CSS cannot restyle or hide the shadow-root panel | "shadow-root panel…" |
+| AT-26 | Two tabs sending at once never exceed the daily cap (all-or-nothing per manual send) | "two simultaneous sends…" |
+
 ## Unit-level acceptance criteria
 
 | Area | Criterion | Test |
@@ -64,7 +76,12 @@ Page delays are set to 100 to 200 ms through the options page.
 | Sender | Headers (content type, event id, version, idempotency, auth, signature), `credentials: omit`, `redirect: error`; status classification; network error and timeout retryable; standard scheme + Deepline dedupe header | `sender.test.ts` |
 | Settings | https-only with localhost exception; origin pattern | `settings.test.ts` |
 | Export job | URL classification; `?page=N` rewrite preserves LinkedIn encoding; result-count parsing; limit cap at 2,500; page advance; stop reasons (limit, no more pages, empty page, page 100, daily cap); pause/resume/stop/fail transitions; delay bounds | `export-job.test.ts` |
-| Receiver | Rejects unsigned/tampered/stale; stores generic, flat/Deepline, and batch bodies; replays by event id are acknowledged without re-insert; upsert by identity increments `send_count` | `receiver.test.ts` |
+| Receiver | Refuses to start unsigned; loopback bind; reads need admin token; rejects unsigned/tampered/stale/fractional/malformed; header/body event id must match; concurrent replays acknowledged once; 17 malformed-but-signed shapes return 400 without crashing; oversized bodies 413; hostile URLs dropped; name-fallback identities hashed and flagged; imports and searches stored | `receiver.test.ts` |
+| Worker | Sender trust boundary (other extension ids, hostile tabs, page vs popup privileges), redacted settings to content scripts, hostile URL re-validation, 5 concurrent captures against a cap of 30 admit exactly 30, dedupe reserve/confirm/release, stale lease recovery, clear-all keeps in-flight, log entries never contain secrets | `worker.test.ts` |
+| Names/URLs | 20 name-cleaning cases (emoji, flags, pronouns, credentials, CJK, Cyrillic, Yoruba diacritics, Turkish, "Last, First"), particles/suffixes/mononyms, hostile hosts, nested paths, encoded slashes, slug length, unicode slugs | `normalize.test.ts` |
+| Search grammar | Nested parentheses, commas inside values, ids without text, exclusions, junk/unbalanced input, 30 KB input, repeated keys, session/tracking redaction, case-insensitive page key | `search.test.ts` |
+| Settings | Garbage coerced to defaults and clamps, reserved/invalid headers rejected, custom fields bounded, content settings carry no secrets | `settings.test.ts`, `validate.test.ts` |
+| Signing | Fractional/negative/huge timestamps, malformed signatures, base64url and unpadded `whsec_`, malformed `whsec_` rejected, multi-signature headers, dotted ids | `signing.test.ts` |
 
 ## Live verification (2026-09-03, real LinkedIn session)
 

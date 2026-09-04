@@ -22,7 +22,7 @@ const manifest = {
   version: pkg.version,
   description: "Send LinkedIn and Sales Navigator leads to any webhook, Deepline play, or CRM list. Open source, by Deepline.",
   minimum_chrome_version: "116",
-  permissions: ["storage", "alarms", "activeTab"],
+  permissions: ["storage", "alarms"],
   // Only LinkedIn is requested at install. The webhook URL the user
   // configures is requested as an optional host permission at save time.
   host_permissions: matches,
@@ -61,7 +61,7 @@ await build({
   outdir,
   sourcemap: isTest ? "inline" : false,
   minify: !isTest,
-  define: { __EXTENSION_VERSION__: JSON.stringify(pkg.version), __TEST_BUILD__: JSON.stringify(isTest) },
+  define: { __EXTENSION_VERSION__: JSON.stringify(pkg.version), __TEST_BUILD__: JSON.stringify(isTest), __LWE_DEBUG__: JSON.stringify(isTest || process.env.LWE_DEBUG === "1") },
   logLevel: "info"
 });
 

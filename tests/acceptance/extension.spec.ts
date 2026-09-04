@@ -1,5 +1,5 @@
 import { expect, test, type BrowserContext } from "@playwright/test";
-import { configure, FixtureSite, hmacB64, hmacHex, launchWithExtension, MockWebhook, PAGED_TOTAL, readStorage, sendMessage } from "./harness";
+import { cleanSampleName, configure, FixtureSite, hmacB64, hmacHex, launchWithExtension, MockWebhook, PAGED_TOTAL, readStorage, sendMessage } from "./harness";
 
 const SECRET = "acceptance-secret";
 let site: FixtureSite;
@@ -31,7 +31,7 @@ test("profile page: one click sends a signed, well-formed lead.captured payload"
   const panel = page.locator("[data-lwe-panel]");
   await expect(panel).toBeVisible();
   await panel.locator('[data-lwe-action="send"]').click();
-  await expect(panel.locator("[data-lwe-status]")).toHaveText(/Sent 1/);
+  await expect(panel.locator("[data-lwe-status]")).toHaveText(/Queued 1/);
 
   const [req] = await hook.waitFor(1);
   expect(req.headers["content-type"]).toBe("application/json");
@@ -65,7 +65,7 @@ test("dedupe: the same profile is not sent twice unless forced", async () => {
   await page.goto(`${site.origin}/in/jane-doe-123/`);
   const panel = page.locator("[data-lwe-panel]");
   await panel.locator('[data-lwe-action="send"]').click();
-  await expect(panel.locator("[data-lwe-status]")).toHaveText(/Sent 1/);
+  await expect(panel.locator("[data-lwe-status]")).toHaveText(/Queued 1/);
   await hook.waitFor(1);
 
   await panel.locator('[data-lwe-action="send"]').click();
@@ -93,7 +93,7 @@ test("Sales Navigator search: select rows and send; single mode yields one reque
   await boxes.nth(1).check();
   await expect(page.locator('[data-lwe-action="send"]')).toHaveText("Send 2 selected");
   await page.locator('[data-lwe-action="send"]').click();
-  await expect(page.locator("[data-lwe-status]")).toHaveText(/Sent 2/);
+  await expect(page.locator("[data-lwe-status]")).toHaveText(/Queued 2/);
 
   const reqs = await hook.waitFor(2);
   const names = reqs.map((r) => r.json.lead.full_name).sort();
@@ -136,7 +136,8 @@ test("deepline preset: flat row keyed by Deepline field names", async () => {
   await page.goto(`${site.origin}/in/jane-doe-123/`);
   await page.locator('[data-lwe-action="send"]').click();
   const [req] = await hook.waitFor(1);
-  expect(Object.keys(req.json).slice(0, 5)).toEqual(["linkedin_url", "first_name", "last_name", "title", "company_name"]);
+  expect(Object.keys(req.json).slice(0, 4)).toEqual(["schema_version", "event", "event_id", "sent_at"]);
+  expect(Object.keys(req.json).slice(4, 9)).toEqual(["linkedin_url", "first_name", "last_name", "title", "company_name"]);
   expect(req.json).toMatchObject({ linkedin_url: "https://www.linkedin.com/in/jane-doe-123", title: "VP of Sales", company_name: "Acme Corp", company_domain: null, email: null, source: "linkedin-webhook-exporter", full_name: "Jane Doe", page_type: "profile" });
   expect(req.json.event_id).toBe(req.headers["x-lwe-event-id"]);
   // Deepline idempotency: single sends are keyed by profile identity, not event id.
@@ -217,7 +218,7 @@ test("daily cap blocks sends beyond the limit", async () => {
   await page.locator('[data-lwe-action="select-all"]').click(); // clear
   await first.check();
   await page.locator('[data-lwe-action="send"]').click();
-  await expect(page.locator("[data-lwe-status]")).toHaveText(/Sent 1 · 1 left today/);
+  await expect(page.locator("[data-lwe-status]")).toHaveText(/Queued 1 · 1 left today/);
 });
 
 /* AT-09 */
@@ -288,7 +289,7 @@ test("export all pages from the panel: walks every page, respects the limit, kee
   const job = await waitForJob((j) => j.status === "done");
   expect(job).toMatchObject({ status: "done", stopReason: "limit", pagesDone: 2, collected: 40, sent: 40, skipped: 0, totalHint: 60 });
   const reqs = await hook.waitFor(40);
-  expect(reqs.map((r) => r.json.lead.full_name)).toEqual(Array.from({ length: 40 }, (_, i) => `Lead ${i + 1}`));
+  expect(reqs.map((r) => r.json.lead.full_name)).toEqual(Array.from({ length: 40 }, (_, i) => cleanSampleName(i + 1)));
   expect(reqs[39].json.source.page_url).toContain("page=2");
   // every lead of the export carries the job id as import id, page number, and search name
   expect(reqs[0].json.import).toMatchObject({ import_id: job.id, import_kind: "export", page: 1, search_name: "paged" });
@@ -360,7 +361,7 @@ test("already-sent people are skipped, not re-sent, and counted", async () => {
   await page.locator('[data-lwe-action="select-all"]').click();
   await expect(page.locator('[data-lwe-action="send"]')).toHaveText("Send 25 selected");
   await page.locator('[data-lwe-action="send"]').click();
-  await expect(page.locator("[data-lwe-status]")).toHaveText(/Sent 25/);
+  await expect(page.locator("[data-lwe-status]")).toHaveText(/Queued 25/);
   await hook.waitFor(25);
   await page.fill("[data-lwe-export-limit]", "30");
   await page.locator('[data-lwe-action="export-all"]').click();
@@ -369,7 +370,7 @@ test("already-sent people are skipped, not re-sent, and counted", async () => {
   await hook.waitFor(30);
   await page.waitForTimeout(300);
   expect(hook.leads.length).toBe(30);
-  expect(hook.leads.slice(25).map((r) => r.json.lead.full_name)).toEqual(["Lead 26", "Lead 27", "Lead 28", "Lead 29", "Lead 30"]);
+  expect(hook.leads.slice(25).map((r) => r.json.lead.full_name)).toEqual([26, 27, 28, 29, 30].map(cleanSampleName));
 });
 
 /* AT-18 */
@@ -405,4 +406,136 @@ test("export refuses to start without a webhook or on a non-exportable URL", asy
   await popup.click("#exportStart");
   await expect(popup.locator("#exportError")).toHaveText(/not a Sales Navigator/);
   expect(hook.received).toHaveLength(0);
+});
+
+/* ---------------- audit remediation: navigation, lazy rows, samples, log, secrets ---------------- */
+
+/* AT-20 */
+test("navigating to a different query on the same path remounts the panel with fresh rows", async () => {
+  await configure(context, extensionId, { webhookUrl: hook.url, signingSecret: SECRET, dailyCap: 2500 });
+  const page = await context.newPage();
+  await page.goto(PAGED());
+  await expect(page.locator("[data-lwe-row-check]")).toHaveCount(25);
+  // Same path, different query, via pushState (SPA style), then replaceState.
+  await page.evaluate(() => history.pushState({}, "", "/sales/search/people?query=paged&page=3"));
+  await page.waitForTimeout(800);
+  await expect(page.locator("[data-lwe-row-check]")).toHaveCount(25); // DOM unchanged; rows re-decorated once, never duplicated
+  await page.evaluate(() => history.replaceState({}, "", "/sales/search/people?query=paged&page=1&sessionId=abc"));
+  await page.waitForTimeout(800);
+  await expect(page.locator("[data-lwe-panel]")).toHaveCount(1);
+  await expect(page.locator("[data-lwe-row-check]")).toHaveCount(25);
+  // Twenty route flips must not leak panels or checkboxes.
+  for (let i = 0; i < 20; i++) await page.evaluate((i) => history.pushState({}, "", `/sales/search/people?query=paged&page=${(i % 3) + 1}`), i);
+  await page.waitForTimeout(1500);
+  await expect(page.locator("[data-lwe-panel]")).toHaveCount(1);
+  await expect(page.locator("[data-lwe-row-check]")).toHaveCount(25);
+});
+
+/* AT-21 */
+test("delayed lazy rows are rendered by auto-scroll before an export page is parsed", async () => {
+  await configure(context, extensionId, { webhookUrl: hook.url, signingSecret: SECRET, dailyCap: 2500, ...FAST });
+  const page = await context.newPage();
+  await page.goto(`${site.origin}/sales/search/people?query=delayed`);
+  await page.fill("[data-lwe-export-limit]", "25");
+  await page.locator('[data-lwe-action="export-all"]').click();
+  const job = await waitForJob((j) => j.status === "done", 60_000);
+  expect(job).toMatchObject({ pagesDone: 1, collected: 25, sent: 25 });
+  await hook.waitFor(25, 20_000);
+});
+
+/* AT-22 */
+test("a lead list without a Next control stops after one page and parses messy names", async () => {
+  await configure(context, extensionId, { webhookUrl: hook.url, signingSecret: SECRET, dailyCap: 2500, ...FAST });
+  const page = await context.newPage();
+  await page.goto(`${site.origin}/sales/lists/people/7263`);
+  await expect(page.locator("[data-lwe-row-check]")).toHaveCount(12);
+  await page.locator('[data-lwe-action="export-all"]').click();
+  const job = await waitForJob((j) => j.status === "done");
+  expect(job).toMatchObject({ stopReason: "no_more_pages", pagesDone: 1, collected: 12, sent: 12 });
+  const reqs = await hook.waitFor(12);
+  const names = reqs.map((r) => r.json.lead.full_name);
+  expect(names).toContain("Bob Okafor");
+  expect(names).toContain("Владимир Петров");
+  expect(names).toContain("O'Connor-Smith, Seán");
+  const inj = reqs.find((r) => r.json.lead.full_name.includes("Injector"))!.json.lead;
+  expect(inj.company_linkedin_url).toBeNull(); // hostile host dropped twice (parser + worker)
+  expect(reqs.every((r) => r.json.import.list_id === "7263" && r.json.import.import_kind === "export")).toBe(true);
+  expect(hook.searches[0].json.search.list_id).toBe("7263");
+});
+
+/* AT-23 */
+test("2026-layout profile and people search send well-formed records with warnings", async () => {
+  await configure(context, extensionId, { webhookUrl: hook.url, signingSecret: SECRET, dailyCap: 2500 });
+  const page = await context.newPage();
+  await page.goto(`${site.origin}/in/zoe-angstrom-%C3%A5/`);
+  await page.locator('[data-lwe-action="send"]').click();
+  const [zoe] = await hook.waitFor(1);
+  expect(zoe.json.lead).toMatchObject({ full_name: "Zoë Ångström", title: "Chief Revenue Officer", company_name: "Ångström & Sons", location: "Stockholm, Stockholm County, Sweden", connection_degree: "2nd" });
+  expect(zoe.json.lead.parse_warnings).toContain("sdui_layout");
+  expect(zoe.json.lead.experience).toHaveLength(5);
+  await page.goto(`${site.origin}/search/results/people/?keywords=chief%20revenue%20officer`);
+  await expect(page.locator("[data-lwe-row-check]")).toHaveCount(9); // anonymous member excluded
+  await page.locator('[data-lwe-action="select-all"]').click();
+  await page.locator('[data-lwe-action="send"]').click();
+  const reqs = await hook.waitFor(10);
+  const cher = reqs.find((r) => r.json.lead.full_name === "Cher")!.json.lead;
+  expect(cher).toMatchObject({ first_name: "Cher", last_name: null, location: "Mount Pleasant, South Carolina, United States", title: "Chief Revenue Officer (CRO)" });
+  expect(reqs.find((r) => r.json.lead.full_name === "Hostile Host")!.json.lead.linkedin_url).toBeNull();
+  expect(reqs.find((r) => r.json.lead.full_name === "李 小龙")!.json.lead.linkedin_url).toBe("https://www.linkedin.com/in/%E6%9D%8E%E5%B0%8F%E9%BE%99-abc");
+});
+
+/* AT-24 */
+test("every action is logged automatically and secrets never appear in the log or in page-visible settings", async () => {
+  await configure(context, extensionId, { webhookUrl: hook.url, signingSecret: "super-secret-value", authHeaderName: "Authorization", authHeaderValue: "Bearer token-value" });
+  const page = await context.newPage();
+  await page.goto(`${site.origin}/in/jane-doe-123/`);
+  await page.locator('[data-lwe-action="send"]').click();
+  await hook.waitFor(1);
+  await page.locator('[data-lwe-action="send"]').click(); // duplicate -> logged as skipped
+  await expect(page.locator("[data-lwe-status]")).toHaveText(/already sent/);
+  const entries = (await sendMessage(context, extensionId, { type: "GET_LOG", limit: 100 })) as Array<{ kind: string; msg: string }>;
+  const kinds = entries.map((e) => e.kind);
+  for (const k of ["settings.saved", "capture.requested", "capture.queued", "send.attempt", "send.ok", "capture.duplicate"]) expect(kinds).toContain(k);
+  const text = JSON.stringify(entries);
+  expect(text).not.toContain("super-secret-value");
+  expect(text).not.toContain("token-value");
+  // (What a content script may see is covered by tests/unit/worker.test.ts: GET_SETTINGS from a page is redacted.)
+  // The popup shows the activity feed.
+  const popup = await context.newPage();
+  await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+  await expect(popup.locator("#log li").first()).toContainText(/capture|send|settings/i);
+});
+
+/* AT-25 */
+test("shadow-root panel: LinkedIn-style page CSS cannot restyle the controls", async () => {
+  await configure(context, extensionId, { webhookUrl: hook.url });
+  const page = await context.newPage();
+  await page.goto(`${site.origin}/in/jane-doe-123/`);
+  await page.addStyleTag({ content: "button { display: none !important; background: red !important; }" });
+  const btn = page.locator('[data-lwe-action="send"]');
+  await expect(btn).toBeVisible();
+  const bg = await btn.evaluate((b) => getComputedStyle(b).backgroundColor);
+  expect(bg).not.toBe("rgb(255, 0, 0)");
+  expect(await page.locator("[data-lwe-panel]").evaluate((h) => !!h.shadowRoot)).toBe(true);
+});
+
+/* AT-26 */
+test("two simultaneous sends from two tabs never exceed the daily cap", async () => {
+  await configure(context, extensionId, { webhookUrl: hook.url, signingSecret: SECRET, dailyCap: 30, dedupe: false });
+  const a = await context.newPage();
+  const b = await context.newPage();
+  await a.goto(PAGED());
+  await b.goto(`${site.origin}/sales/search/people?query=paged&page=2`);
+  await expect(a.locator("[data-lwe-row-check]")).toHaveCount(25);
+  await expect(b.locator("[data-lwe-row-check]")).toHaveCount(25);
+  await a.locator('[data-lwe-action="select-all"]').click();
+  await b.locator('[data-lwe-action="select-all"]').click();
+  await Promise.all([a.locator('[data-lwe-action="send"]').click(), b.locator('[data-lwe-action="send"]').click()]);
+  await a.waitForTimeout(1500);
+  const st = await sendMessage(context, extensionId, { type: "GET_STATE" });
+  expect(st.sentToday).toBeLessThanOrEqual(30);
+  expect(st.sentToday).toBe(25); // one page fits (25), the other is rejected whole (all-or-nothing for manual sends)
+  await hook.waitFor(25);
+  await a.waitForTimeout(500);
+  expect(hook.leads.length).toBe(25);
 });

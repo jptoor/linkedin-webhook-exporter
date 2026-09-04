@@ -12,33 +12,35 @@ describe("URL helpers", () => {
     expect(exportablePageType("https://www.linkedin.com/in/jane")).toBeNull();
     expect(exportablePageType("nope")).toBeNull();
   });
-  it("sets and strips the page param without touching other params", () => {
+  it("sets and strips the page param without touching other params or encoding", () => {
     expect(urlForPage(SN, 3)).toBe(SN + "&page=3");
     expect(urlForPage(SN + "&page=7", 1)).toBe(SN);
     expect(urlForPage(SN + "&page=7", 2)).toBe(SN + "&page=2");
+    expect(urlForPage("https://x/y#frag", 2)).toBe("https://x/y?page=2#frag");
     expect(pageFromUrl(SN + "&page=7")).toBe(7);
     expect(pageFromUrl(SN)).toBe(1);
     expect(pageFromUrl(SN + "&page=abc")).toBe(1);
+    expect(pageFromUrl(SN + "&page=-3")).toBe(1);
   });
-  it("parses LinkedIn's result-count text", () => {
+  it("parses LinkedIn's result-count text in several forms", () => {
     expect(parseTotalHint("1.5K+ results")).toBe(1500);
     expect(parseTotalHint("2,431 results")).toBe(2431);
     expect(parseTotalHint("10M+ results")).toBe(10_000_000);
+    expect(parseTotalHint("490K+ results")).toBe(490_000);
+    expect(parseTotalHint("1 result")).toBe(1);
     expect(parseTotalHint("Showing 25 leads")).toBeNull();
     expect(parseTotalHint(null)).toBeNull();
   });
 });
 
 describe("job lifecycle", () => {
-  it("starts on the URL's page, caps the limit at 2,500, and normalizes the source URL", () => {
+  it("starts on the URL's page, caps the limit at 2,500, normalizes the source URL, rev 0", () => {
     const j = newJob("j1", SN + "&page=4", "salesnav_search", 9000, T);
-    expect(j.page).toBe(4);
-    expect(j.limit).toBe(2500);
-    expect(j.sourceUrl).toBe(SN);
-    expect(j.status).toBe("running");
+    expect(j).toMatchObject({ page: 4, limit: 2500, sourceUrl: SN, status: "running", rev: 0 });
     expect(isActive(j)).toBe(true);
+    expect(newJob("j2", SN, "salesnav_search", 0, T).limit).toBe(1);
   });
-  it("advances pages and finishes on limit", () => {
+  it("advances pages and finishes on limit (limit counts collected rows)", () => {
     let j = newJob("j", SN, "salesnav_search", 40, T);
     j = afterPage(j, { rows: 25, queued: 20, skipped: 5, hasNext: true, totalHint: 1500, capReached: false }, T + 1);
     expect(j).toMatchObject({ page: 2, pagesDone: 1, collected: 25, sent: 20, skipped: 5, totalHint: 1500, status: "running" });
@@ -57,7 +59,7 @@ describe("job lifecycle", () => {
     const j = afterPage(newJob("j", SN, "salesnav_search", 2500, T), { rows: 25, queued: 10, skipped: 0, hasNext: true, totalHint: null, capReached: true }, T);
     expect(j).toMatchObject({ status: "stopped", stopReason: "daily_cap", sent: 10, collected: 25 });
   });
-  it("pause / resume / stop / fail transitions", () => {
+  it("pause / resume / stop / fail transitions are sticky at terminal states", () => {
     let j = newJob("j", SN, "salesnav_search", 100, T);
     j = pause(j, T);
     expect(j.status).toBe("paused");
@@ -65,8 +67,9 @@ describe("job lifecycle", () => {
     expect(resume(pause(j, T), T).status).toBe("running");
     const s = stop(j, T + 5);
     expect(s).toMatchObject({ status: "stopped", stopReason: "user", finishedAt: T + 5 });
-    expect(stop(s, T + 9)).toBe(s); // terminal states are sticky
+    expect(stop(s, T + 9)).toBe(s);
     expect(resume(s, T)).toBe(s);
+    expect(pause(s, T)).toBe(s);
     expect(fail(j, "tab_closed", T)).toMatchObject({ status: "error", stopReason: "error", lastError: "tab_closed" });
   });
   it("page delay stays within bounds", () => {

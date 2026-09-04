@@ -27,7 +27,8 @@ for (const f of files) {
     const body = JSON.stringify(buildSearchBody(buildSearchRecord(data.pageUrl, pageType, data.totalHint ?? null, sentAt), settings.mappingPreset, source, {}, id, sentAt));
     const r = await sendBody(settings, body, id, { version: "live", dedupeKey: `search:${data.pageUrl}` });
     console.log(`search.captured ${pageType} -> ${r.status} ${r.ok ? "ok" : r.error}`);
-    r.ok ? sent++ : failed++;
+    if (r.ok) sent++;
+    else failed++;
   }
   const leads = data.leads ?? (data.lead ? [data.lead] : []);
   const isList = pageType === "salesnav_search" || pageType === "salesnav_list" || pageType === "people_search";
@@ -36,7 +37,8 @@ for (const f of files) {
   for (const b of buildBodies(leads, { preset: settings.mappingPreset, mode: "single", source, custom: { run: "live-test" }, eventId: () => crypto.randomUUID(), sentAt, import: imp })) {
     const r = await sendBody(settings, JSON.stringify(b.body), b.eventId, { version: "live", dedupeKey: dedupeKey(b.leads[0]) });
     console.log(`lead.captured ${pageType} ${b.leads[0].full_name.padEnd(28)} -> ${r.status} ${r.ok ? "ok" : r.error}`);
-    r.ok ? sent++ : failed++;
+    if (r.ok) sent++;
+    else failed++;
   }
 }
 console.log(`\nsent=${sent} failed=${failed}`);

@@ -37,11 +37,11 @@ describe("sendBody", () => {
       return new Response("", { status: 202 });
     }) as unknown as typeof fetch;
     const secret = "whsec_" + Buffer.from("raw-key-bytes").toString("base64");
-    await sendBody({ ...settings, signatureScheme: "standard", signingSecret: secret, mappingPreset: "deepline" }, "{}", "evt-9", { version: "x", fetchImpl, now: () => 1_700_000_000_000, dedupeKey: "https://www.linkedin.com/in/jane" });
-    expect(h["webhook-id"]).toBe("evt-9");
+    await sendBody({ ...settings, signatureScheme: "standard", signingSecret: secret, mappingPreset: "deepline" }, "{}", "evt-9-xxxxxxxx", { version: "x", fetchImpl, now: () => 1_700_000_000_000, dedupeKey: "https://www.linkedin.com/in/jane" });
+    expect(h["webhook-id"]).toBe("evt-9-xxxxxxxx");
     expect(h["webhook-timestamp"]).toBe("1700000000");
     const { createHmac } = await import("node:crypto");
-    expect(h["webhook-signature"]).toBe("v1," + createHmac("sha256", "raw-key-bytes").update("evt-9.1700000000.{}").digest("base64"));
+    expect(h["webhook-signature"]).toBe("v1," + createHmac("sha256", "raw-key-bytes").update("evt-9-xxxxxxxx.1700000000.{}").digest("base64"));
     expect(h["X-LWE-Signature"]).toBeUndefined();
     expect(h["x-deepline-dedupe-key"]).toBe("https://www.linkedin.com/in/jane");
     expect(h["Idempotency-Key"]).toBe("https://www.linkedin.com/in/jane");

@@ -14,12 +14,17 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
+      - run: npm run lint
       - run: npm test
       - run: npm run build
+      - run: node scripts/pack.mjs
+      - run: npm audit --audit-level=high || echo "::warning::npm audit reported advisories"
       - run: npx playwright install --with-deps chromium
       - run: npm run test:acceptance
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: extension-dist
-          path: dist
+          name: extension
+          path: |
+            dist
+            linkedin-webhook-exporter-*.zip

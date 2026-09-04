@@ -27,6 +27,8 @@ export interface ExportJob {
   finishedAt: number | null;
   lastError: string | null;
   totalHint: number | null; // LinkedIn's "1.5K+ results" if we could read it
+  /** Revision counter for compare-and-swap commits: every persisted change bumps it. */
+  rev: number;
 }
 
 export type ExportablePageType = Extract<PageType, "salesnav_search" | "salesnav_list" | "people_search">;
@@ -88,7 +90,8 @@ export function newJob(id: string, sourceUrl: string, pageType: ExportablePageTy
     updatedAt: now,
     finishedAt: null,
     lastError: null,
-    totalHint: null
+    totalHint: null,
+    rev: 0
   };
 }
 

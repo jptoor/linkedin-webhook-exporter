@@ -154,7 +154,9 @@ names, no `<h1>`, and no section ids ("SDUI"). Parsers therefore anchor on:
 | Sales Navigator search / list | `#search-results-container li.artdeco-list__item` with `data-anonymize` attributes (`person-name`, `title`, `company-name`, `location`) and the member URN in the lead link | Rows are skeletons until they intersect the viewport; the content script smooth-scrolls. 25 per page, `?page=N`. |
 | Sales Navigator lead | `h1[data-anonymize="person-name"]`, `[data-anonymize="headline"]`, `#experience-section li[class*="experience-entry"]` (flat, or grouped by company with `<h3>` roles) | Location has no attribute; taken from the current role. Degree is a sibling span of the name. No public `/in/` link is exposed. |
 
-Live results on real pages: profile (name, headline, title, company + URL,
+These findings are dated manual evidence from one session, kept here for
+context; the reproducible versions are the sample pages in `samples/` that
+model each structure. Live results on real pages: profile (name, headline, title, company + URL,
 location, degree, 5 experience entries), Sales Navigator search (25/25 rows;
 company on 21, the rest have no company link), Sales Navigator lead (name,
 headline, current role, company + URL, location, degree, 6 experience
@@ -170,9 +172,22 @@ degree; title/company split when the headline has "at" or " - ").
   (subdomains, query strings, trailing slashes removed). Sales Nav lead URLs
   canonicalize to `https://www.linkedin.com/sales/lead/<id>`. Company URLs to
   `https://www.linkedin.com/company/<id-or-slug>`.
-- Current title/company: from the experience list's first entry, else from
-  the top-card "Current company" control, else by splitting the headline on
-  " at " / " @ ".
+- Current title/company (classic layout): the top-card "Current company"
+  control first, then the first experience entry, then the headline split.
+  In the 2026 layout: the top card's company line, then the first experience
+  entry, then the headline. When history is excluded only the first entry is
+  read. Headline splits recognize " at ", " @ ", " - ", " | " and " — " and
+  refuse to guess when neither side looks like a role.
+- Every record carries `parse_warnings` (e.g. `location_missing`,
+  `headline_unsplit`, `sdui_layout`, `experience_grouping_uncertain`,
+  `name_from_title`) so receivers can route low-confidence rows to review.
+- Names: trailing badges (reachable, open to work, hiring, pronouns, emoji,
+  degree) and exact credential tokens after a comma are stripped; mononyms
+  keep `last_name` null; particles ("van der", "de la") and generational
+  suffixes stay with the last name; "Last, First" is honored.
+- URLs: only LinkedIn hosts (apex, www, two-letter regional subdomains) are
+  accepted; credentials, ports and nested paths are rejected; slugs and URNs
+  must match a conservative grammar. Hostile hrefs become `null`.
 - `about` is truncated to 2,000 characters; experience is capped at 10
   entries and education at 5.
 
@@ -204,6 +219,13 @@ Three mapping presets and two send modes:
 A test event (`event:"test"`) is sent from the options page to validate the
 endpoint; receivers should accept and ignore it.
 
+### 4.4b Envelope
+
+Every body, in every preset and for every event, starts with
+`schema_version`, `event`, `event_id`, `sent_at`. Flat and Deepline batch
+bodies repeat `source`, `import`, and `custom` fields on the envelope and in
+each row. `isPayload()` checks the event enum.
+
 ### 4.5 Transport
 
 - `POST <webhookUrl>` with `Content-Type: application/json`, `credentials: omit`,
@@ -214,6 +236,10 @@ endpoint; receivers should accept and ignore it.
   selected) is the lead's identity key for unforced single sends, so a
   re-capture of the same profile is a no-op downstream, and the event id for
   batches and forced resends.
+- Timestamps are integer unix seconds; event ids match `[A-Za-z0-9_-]{8,64}`.
+  Verification proves authenticity and freshness only; receivers must keep
+  their own event-id store for uniqueness (the reference receiver does,
+  inside its transaction, and requires header/body ids to match).
 - Signature (when a secret is set), one of:
   - **LWE**: `X-LWE-Timestamp: <unix s>`, `X-LWE-Signature: sha256=<hex HMAC-SHA256(secret, "<ts>.<body>")>`.
   - **Standard Webhooks**: `webhook-id: <event id>`, `webhook-timestamp: <unix s>`,
@@ -227,10 +253,25 @@ endpoint; receivers should accept and ignore it.
   are allowed for development. The host is requested as an optional
   permission when saved, so the extension never holds blanket host access.
 
+### 4.5b Activity log
+
+Every capture request, admission, rejection, duplicate skip, send attempt and
+result, retry schedule, lease recovery, export step and state change, queue
+command, settings change, and webhook test is appended to a local ring buffer
+(last 1,000 entries) with structured, secret-redacted details. The popup
+shows the feed; the options page previews and downloads it as JSON.
+
 ### 4.6 Delivery guarantees
 
 - Every send is persisted to a queue in `chrome.storage.local` before the
   first attempt. The stored body is the exact bytes signed on every retry.
+- All queue, dedupe, counter, and export-job writes run under one async mutex
+  in the service worker, so concurrent captures (two tabs, export + click)
+  cannot lose items or exceed the cap.
+- A claimed (`sending`) item carries a 90 s lease; if the worker is suspended
+  mid-request the lease expires and the item is retried.
+- Dedupe identities are reserved when queued, confirmed on a 2xx, and
+  released on a permanent failure, so "already sent" means delivered.
 - Response classification: 2xx = sent; 408 / 425 / 429 / 5xx / network error /
   timeout = retry; any other 4xx = failed, no retry.
 - Backoff: 1 m, 5 m, 30 m, 2 h, 6 h; 6 attempts max. Retries are driven by
@@ -240,10 +281,12 @@ endpoint; receivers should accept and ignore it.
 
 ### 4.7 Safety controls
 
-- Daily cap (default 100 leads/day, configurable). A capture that would
-  exceed it is rejected with the remaining count shown. Community guidance
-  (Vayne, Yalc, Clura, 2026) puts safe extension-driven capture at 50 to 100
-  profiles/day; Sales Navigator bulk scraping is the most restricted pattern.
+- Daily cap (default 100, maximum 2,000) on admissions into the queue, per
+  local calendar day. A manual capture that would exceed it is rejected
+  whole; a bulk-export page is truncated to what remains. Delivered and
+  failed counts are tracked separately. The cap is a convenience for the
+  operator, not a compliance mechanism: LinkedIn prohibits scraping and
+  automation by extensions regardless of volume.
 - Dedupe by identity key with a TTL (default 30 days). Duplicates are skipped
   and reported, never silently dropped. Force resend overrides.
 - Interactive capture never scrolls, paginates, or navigates on its own. Bulk
@@ -253,11 +296,27 @@ endpoint; receivers should accept and ignore it.
 
 ### 4.8 Settings
 
-All in `chrome.storage.local` (never `sync`):
+All in `chrome.storage.local` (never `sync`), validated and clamped on every
+read (`sanitizeSettings`):
 
-`webhookUrl, signingSecret, signatureScheme, authHeaderName, authHeaderValue,
-mappingPreset, sendMode, dedupe, dedupeTtlDays, dailyCap, capturedBy,
-customFields, includeExperience, includeEducation, includeAbout`.
+| Setting | Type / range | Default |
+|---|---|---|
+| `webhookUrl` | https, or http on localhost; no credentials | "" |
+| `signingSecret` | string | "" |
+| `signatureScheme` | `lwe` \| `standard` | `lwe` |
+| `authHeaderName` / `authHeaderValue` | valid header, not reserved, no control chars | "" |
+| `mappingPreset` | `generic` \| `flat` \| `deepline` | `generic` |
+| `sendMode` | `single` \| `batch` | `single` |
+| `dedupe` / `dedupeTtlDays` | bool / 1..365 | true / 30 |
+| `dailyCap` | 1..2000 | 100 |
+| `capturedBy` | ≤200 chars | "" |
+| `customFields` | ≤20 keys, values ≤500 chars | {} |
+| `includeExperience` / `includeEducation` / `includeAbout` | bool | true |
+| `exportDefaultLimit` | 1..2500 | 500 |
+| `exportPageDelayMinMs` / `exportPageDelayMaxMs` | 1000..120000, min ≤ max | 4000 / 9000 |
+
+Content scripts receive only `includeExperience`, `includeEducation`,
+`includeAbout`, `exportDefaultLimit`, `dedupe`, `sendMode`, `hasWebhook`.
 
 ## 5. Deepline integration
 

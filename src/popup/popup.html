@@ -18,6 +18,9 @@
   button.primary { background: #1C112A; color: #fff; }
   a { color: #1C112A; text-decoration: none; font-size: 12px; }
   .muted { color: #6b7280; }
+  #log li { display: block; }
+  #log .k { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: #6b6478; margin-right: 6px; }
+  #log .t { color: #9ca3af; font-size: 10px; float: right; }
   .brand { display: flex; align-items: center; gap: 7px; }
   footer { display: flex; justify-content: space-between; align-items: center; padding: 8px 14px 12px; border-top: 1px solid #f1f3f5; font-size: 11px; }
   footer img { display: block; opacity: .85; }
@@ -57,6 +60,10 @@
   <button id="retry">Retry failed</button>
   <button id="clear">Clear history</button>
 </div>
+<section>
+  <div style="display:flex; justify-content:space-between; align-items:center"><b>Activity</b><a id="openLog" href="#">Full log</a></div>
+  <ul id="log"></ul>
+</section>
 <footer><a href="https://deepline.com/?utm_source=linkedin-webhook-exporter" target="_blank" rel="noopener"><img src="brand/deepline-wordmark.svg" alt="Deepline" height="12"></a><span class="muted">Open source · MIT</span></footer>
 <script type="module" src="popup.js"></script>
 </body>
