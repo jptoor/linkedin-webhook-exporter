@@ -8,7 +8,7 @@ import { buildSearchRecord, searchKey, searchName } from "../shared/search";
 import { getSettings, toContentSettings, validateWebhookUrl } from "../shared/settings";
 import type { ImportInfo, LeadRecord, PageType, QueueItem, Settings, SourceInfo } from "../shared/types";
 import { isAllowedPageUrl, isPageType, validateLeads } from "../shared/validate";
-import { afterPage, exportablePageType, fail as failJob, isActive, newJob, pageDelayMs, pause as pauseJob, remaining as jobRemaining, resume as resumeJob, stop as stopJob, urlForPage, type ExportJob } from "../shared/export-job";
+import { afterPage, exportablePageType, fail as failJob, isActive, isSameSearchPage, newJob, pageDelayMs, pause as pauseJob, remaining as jobRemaining, resume as resumeJob, stop as stopJob, urlForPage, type ExportJob } from "../shared/export-job";
 import { withLock } from "./lock";
 import { clearLog, logEvent, readLog } from "../shared/log";
 import { afterAttempt, claim, clearQueue, due, newItem, nextWake, prune, recoverStaleLeases } from "./queue";
@@ -336,15 +336,7 @@ async function transitionJob(fn: (j: ExportJob) => ExportJob): Promise<ExportJob
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-function sameUrl(a: string | undefined, b: string): boolean {
-  if (!a) return false;
-  try {
-    const x = new URL(a), y = new URL(b);
-    return x.origin === y.origin && x.pathname === y.pathname && (x.searchParams.get("page") ?? "1") === (y.searchParams.get("page") ?? "1");
-  } catch {
-    return false;
-  }
-}
+const sameUrl = isSameSearchPage;
 
 /** Navigate the job's tab to `url` and wait until it reports complete at that
  *  URL. The listener is attached before navigation so a fast load cannot be
@@ -392,7 +384,7 @@ async function collectWithRetry(tabId: number, jobId: string, page: number, atte
     }
     await sleep(1000);
   }
-  return { ok: false, pageType: null, pageUrl: "", leads: [], hasNext: false, hasNextSource: "none", totalHint: null, error: lastErr };
+  return { ok: false, jobId, expectedPage: page, pageType: null, pageUrl: "", leads: [], hasNext: false, hasNextSource: "none", totalHint: null, error: lastErr };
 }
 
 let exportLoopRunning = false;
@@ -427,7 +419,10 @@ async function runExportLoop(): Promise<void> {
         await commitJob(fresh, failJob(fresh, res.error ?? "collect_failed", Date.now()));
         break;
       }
-      if (!sameUrl(res.pageUrl, url)) {
+      // Handshake: the content script must answer for THIS job and page, at
+      // the exact search URL the job owns (filters included), or the page is
+      // rejected rather than attributed to the job (NF-02).
+      if (res.jobId !== fresh.id || res.expectedPage !== fresh.page || !sameUrl(res.pageUrl, url)) {
         await commitJob(fresh, failJob(fresh, "unexpected_navigation", Date.now()));
         break;
       }
@@ -461,26 +456,39 @@ async function runExportLoop(): Promise<void> {
 }
 
 async function startExport(url: string, limit: number, tabId: number | undefined): Promise<ExportStatusResponse & { error?: string }> {
-  const history = await loadHistory();
   const pageType = exportablePageType(url);
-  const existing = await loadJob();
-  if (existing && isActive(existing)) return { job: existing, history, error: "job_running" };
-  if (!pageType || !isAllowedPageUrl(url, TEST_BUILD)) return { job: null, history, error: "not_exportable_url" };
+  if (!pageType || !isAllowedPageUrl(url, TEST_BUILD)) return { job: null, history: await loadHistory(), error: "not_exportable_url" };
   const settings = await getSettings();
-  if (!settings.webhookUrl) return { job: null, history, error: "no_webhook" };
+  if (!settings.webhookUrl) return { job: null, history: await loadHistory(), error: "no_webhook" };
   const lim = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : settings.exportDefaultLimit;
-  let job = newJob(crypto.randomUUID(), url, pageType, lim, Date.now());
+  // Check-and-reserve atomically: the job row is written under the lock with
+  // tabId null, so a concurrent start sees it and is refused (NF-01).
+  const reserved = await withLock(async (): Promise<{ job: ExportJob } | { error: string; existing: ExportJob }> => {
+    const existing = await loadJob();
+    if (existing && isActive(existing)) return { error: "job_running", existing };
+    const job = newJob(crypto.randomUUID(), url, pageType, lim, Date.now());
+    await chrome.storage.local.set({ [KEYS.exportJob]: job });
+    return { job };
+  });
+  if ("error" in reserved) return { job: reserved.existing, history: await loadHistory(), error: reserved.error };
+  let job = reserved.job;
   void handleSearchCapture(job.sourceUrl, pageType, null);
   if (tabId == null) {
-    const tab = await chrome.tabs.create({ url: urlForPage(job.sourceUrl, job.page), active: true });
-    tabId = tab.id;
+    try {
+      const tab = await chrome.tabs.create({ url: urlForPage(job.sourceUrl, job.page), active: true });
+      tabId = tab.id;
+    } catch (e) {
+      await commitJob(job, failJob(job, e instanceof Error ? e.message : "tab_create_failed", Date.now()));
+      return { job: null, history: await loadHistory(), error: "tab_create_failed" };
+    }
   }
-  job = { ...job, tabId: tabId ?? null };
-  await withLock(async () => chrome.storage.local.set({ [KEYS.exportJob]: job }));
+  const committed = await commitJob(job, { ...job, tabId: tabId ?? null });
+  if (!committed.ok || !committed.current) return { job: null, history: await loadHistory(), error: "job_running" };
+  job = committed.current;
   await logEvent("export.started", `Export started: up to ${job.limit} results from ${searchName(url, pageType) ?? job.sourceUrl}`, { jobId: job.id, pageType, limit: job.limit, sourceUrl: job.sourceUrl, tabId: job.tabId });
   await chrome.alarms.create(EXPORT_ALARM, { periodInMinutes: 1 });
   void runExportLoop();
-  return { job, history };
+  return { job, history: await loadHistory() };
 }
 
 async function exportStatus(senderTabId?: number): Promise<ExportStatusResponse> {

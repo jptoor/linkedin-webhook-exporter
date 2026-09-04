@@ -5,7 +5,7 @@
 import { createServer } from "node:http";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { pagedSalesNav, delayedSalesNav } from "../tests/fixtures/generators.mjs";
+import { pagedSalesNav, delayedSalesNav, appendedSalesNav } from "../tests/fixtures/generators.mjs";
 
 const dir = resolve("samples");
 const PORT = Number(process.env.PORT ?? 8790);
@@ -21,7 +21,8 @@ const server = createServer((req, res) => {
   const u = new URL(req.url ?? "/", "http://x");
   if (/^\/sales\/search\/people/.test(u.pathname)) {
     const page = Number(u.searchParams.get("page") ?? "1");
-    const body = u.searchParams.get("query") === "delayed" ? delayedSalesNav(page) : pagedSalesNav(page);
+    const q = u.searchParams.get("query");
+    const body = q === "delayed" ? delayedSalesNav(page) : q === "appended" ? appendedSalesNav(page) : pagedSalesNav(page);
     return res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(body);
   }
   const hit = routes.find(([re]) => re.test(u.pathname));

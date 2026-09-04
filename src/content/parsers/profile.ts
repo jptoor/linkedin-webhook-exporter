@@ -1,6 +1,6 @@
 import type { EducationEntry, ExperienceEntry, LeadRecord } from "../../shared/types";
 import { canonicalizeCompanyUrl, canonicalizeLinkedInUrl, cleanName, cleanText, parseConnectionDegree, slugFromCanonical, splitName, truncate } from "../../shared/normalize";
-import { attr, emptyLead, firstMatch, looksLikeLocation, splitHeadline, text, warn } from "./common";
+import { attr, emptyLead, firstMatch, looksLikeLocation, setName, splitHeadline, text, warn } from "./common";
 
 export function isProfilePath(pathname: string): boolean {
   return /^\/in\/[^/]+\/?$/.test(pathname);
@@ -72,7 +72,7 @@ function parseEducationClassic(doc: Document): EducationEntry[] {
 function parseProfileClassic(doc: Document, pageUrl: string, opts: ProfileParseOptions, now: string): LeadRecord {
   const lead = emptyLead(now);
   const nameEl = firstMatch(doc, ['h1[data-lwe="name"]', "main h1", "h1.text-heading-xlarge", "h1"]);
-  lead.full_name = cleanName(text(nameEl)) ?? "";
+  setName(lead, text(nameEl));
   if (!lead.full_name) {
     lead.full_name = cleanName(attr(doc.querySelector('meta[property="og:title"]'), "content")?.split(" - ")[0] ?? null) ?? cleanName((doc.title || "").replace(/\s*\|\s*LinkedIn\s*$/, "")) ?? "";
     if (lead.full_name) warn(lead, "name_from_title");
@@ -238,7 +238,7 @@ function parseProfileSdui(doc: Document, pageUrl: string, opts: ProfileParseOpti
   const top = sduiTopCard(doc)!;
   const ls = leaves(top);
   const nameEl = ls.find((e) => /^h[1-3]$/i.test(e.tagName)) ?? Array.from(top.querySelectorAll("h1, h2, h3"))[0] ?? null;
-  lead.full_name = cleanName(nameEl?.textContent) ?? "";
+  setName(lead, nameEl?.textContent);
   if (!lead.full_name) {
     lead.full_name = cleanName((doc.title || "").replace(/\s*\|\s*LinkedIn\s*$/, "")) ?? "";
     if (lead.full_name) warn(lead, "name_from_title");

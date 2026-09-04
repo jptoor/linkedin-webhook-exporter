@@ -62,8 +62,10 @@ export function validateLead(input: unknown): LeadRecord | null {
   const captured = optStr(o.captured_at, 40);
   const img = optStr(o.profile_image_url, MAX.url);
   const warnings = Array.isArray(o.parse_warnings) ? (o.parse_warnings.filter((w) => typeof w === "string").slice(0, MAX.warnings) as ParseWarning[]) : [];
+  const raw = optStr(o.full_name_raw, 300);
   return {
     full_name,
+    full_name_raw: raw && raw !== full_name ? raw : null,
     first_name: optStr(o.first_name, MAX.name),
     last_name: optStr(o.last_name, MAX.name),
     headline: optStr(o.headline, MAX.headline),

@@ -1,6 +1,6 @@
 import type { LeadRecord } from "../../shared/types";
-import { canonicalizeLinkedInUrl, cleanName, cleanText, parseConnectionDegree, slugFromCanonical, splitName } from "../../shared/normalize";
-import { attr, CHATTER_RE, emptyLead, firstMatch, looksLikeLocation, splitHeadline, text, textLines, warn } from "./common";
+import { canonicalizeLinkedInUrl, cleanText, parseConnectionDegree, slugFromCanonical, splitName } from "../../shared/normalize";
+import { attr, CHATTER_RE, emptyLead, firstMatch, looksLikeLocation, setName, splitHeadline, text, textLines, warn } from "./common";
 
 export function isPeopleSearchPath(pathname: string): boolean {
   return /^\/search\/results\/(people|all)\/?/.test(pathname);
@@ -32,7 +32,7 @@ export function parsePeopleSearchRow(row: HTMLElement, now: string): LeadRecord 
   lead.linkedin_slug = slugFromCanonical(lead.linkedin_url);
   const classic = firstMatch(row, ['[data-lwe="name"]', 'span.entity-result__title-text a span[aria-hidden="true"]']);
   if (classic) {
-    lead.full_name = cleanName(text(classic)) ?? "";
+    setName(lead, text(classic));
     lead.headline = cleanText(text(firstMatch(row, ['[data-lwe="headline"]', ".entity-result__primary-subtitle", 'div[class*="primary-subtitle"]'])));
     lead.location = cleanText(text(firstMatch(row, ['[data-lwe="location"]', ".entity-result__secondary-subtitle", 'div[class*="secondary-subtitle"]'])));
     lead.connection_degree = parseConnectionDegree(text(firstMatch(row, ['[data-lwe="degree-badge"]', ".entity-result__badge-text", 'span[class*="badge"]'])));
@@ -45,8 +45,7 @@ export function parsePeopleSearchRow(row: HTMLElement, now: string): LeadRecord 
     const raw = textLines(row);
     // Some cards render the name twice in one text node ("Jane Doe Jane Doe").
     const doubled = (raw[0] ?? "").match(/^(.+?)\s+\1$/u);
-    const name = cleanName(doubled ? doubled[1] : raw[0] ?? null) ?? "";
-    lead.full_name = name;
+    setName(lead, doubled ? doubled[1] : raw[0] ?? null);
     const rest = raw.slice(1).filter((t) => t !== raw[0] && !t.startsWith(raw[0] + " ") && !/^[,&]$/.test(t) && !CHATTER_RE.test(t));
     const degreeIdx = rest.findIndex((t) => DEGREE_LINE.test(t));
     lead.connection_degree = degreeIdx >= 0 ? parseConnectionDegree(rest[degreeIdx]) : null;

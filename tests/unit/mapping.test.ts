@@ -4,7 +4,7 @@ import { buildSearchRecord } from "../../src/shared/search";
 import type { LeadRecord, SourceInfo } from "../../src/shared/types";
 
 const lead: LeadRecord = {
-  full_name: "Jane Doe", first_name: "Jane", last_name: "Doe", headline: "VP Sales at Acme", title: "VP Sales", company_name: "Acme", company_linkedin_url: "https://www.linkedin.com/company/acme", location: "Austin", linkedin_url: "https://www.linkedin.com/in/jane", linkedin_slug: "jane", linkedin_member_urn: null, sales_navigator_url: null, connection_degree: "2nd", profile_image_url: null, about: null,
+  full_name: "Jane Doe", full_name_raw: null, first_name: "Jane", last_name: "Doe", headline: "VP Sales at Acme", title: "VP Sales", company_name: "Acme", company_linkedin_url: "https://www.linkedin.com/company/acme", location: "Austin", linkedin_url: "https://www.linkedin.com/in/jane", linkedin_slug: "jane", linkedin_member_urn: null, sales_navigator_url: null, connection_degree: "2nd", profile_image_url: null, about: null,
   experience: [{ title: "VP Sales", company_name: "Acme", company_linkedin_url: null, date_range: "2023 - Present", location: null }], education: [], captured_at: "2026-09-03T00:00:00.000Z", parse_warnings: ["location_guessed"]
 };
 const lead2: LeadRecord = { ...lead, full_name: "Evan Park", first_name: "Evan", last_name: "Park", linkedin_url: "https://www.linkedin.com/in/evan", linkedin_slug: "evan", parse_warnings: [] };

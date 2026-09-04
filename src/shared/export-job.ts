@@ -1,5 +1,6 @@
 /** Pure state for a paginated bulk export ("submit a Sales Navigator URL, get
  *  every result up to a limit"). No chrome APIs here so it is unit-testable. */
+import { searchKey } from "./search";
 import type { PageType } from "./types";
 
 export const PAGE_SIZE = 25;
@@ -147,6 +148,20 @@ export function fail(job: ExportJob, error: string, now: number): ExportJob {
 
 export function isActive(job: ExportJob | null | undefined): job is ExportJob {
   return !!job && (job.status === "running" || job.status === "paused");
+}
+
+/** Same search AND same page: origin, path, every non-session query parameter,
+ *  and the page number. A changed filter is a different search (NF-02). */
+export function isSameSearchPage(a: string | undefined, b: string): boolean {
+  if (!a) return false;
+  try {
+    const x = new URL(a), y = new URL(b);
+    if (x.origin !== y.origin || x.pathname !== y.pathname) return false;
+    if ((x.searchParams.get("page") ?? "1") !== (y.searchParams.get("page") ?? "1")) return false;
+    return searchKey(a).toLowerCase() === searchKey(b).toLowerCase();
+  } catch {
+    return false;
+  }
 }
 
 /** Human-like jitter between pages. */

@@ -25,7 +25,7 @@ function swHeaders(body: string, id: string, ts = now()) {
   return { "webhook-id": id, "webhook-timestamp": String(ts), "webhook-signature": "v1," + createHmac("sha256", Buffer.from("receiver-key")).update(`${id}.${ts}.${body}`).digest("base64") };
 }
 const admin = { authorization: `Bearer ${ADMIN}` };
-const lead = (over: Record<string, unknown> = {}) => ({ full_name: "Jane Doe", first_name: "Jane", last_name: "Doe", headline: null, title: "VP", company_name: "Acme", company_linkedin_url: null, location: "Austin", linkedin_url: "https://www.linkedin.com/in/jane", linkedin_slug: "jane", linkedin_member_urn: null, sales_navigator_url: null, connection_degree: null, profile_image_url: null, about: null, experience: [{ title: "VP", company_name: "Acme", company_linkedin_url: null, date_range: null, location: null }], education: [], captured_at: "2026-09-03T00:00:00.000Z", parse_warnings: [], ...over });
+const lead = (over: Record<string, unknown> = {}) => ({ full_name: "Jane Doe", full_name_raw: null, first_name: "Jane", last_name: "Doe", headline: null, title: "VP", company_name: "Acme", company_linkedin_url: null, location: "Austin", linkedin_url: "https://www.linkedin.com/in/jane", linkedin_slug: "jane", linkedin_member_urn: null, sales_navigator_url: null, connection_degree: null, profile_image_url: null, about: null, experience: [{ title: "VP", company_name: "Acme", company_linkedin_url: null, date_range: null, location: null }], education: [], captured_at: "2026-09-03T00:00:00.000Z", parse_warnings: [], ...over });
 const env = (extra: Record<string, string> = {}) => ({ ...process.env, PORT: "0", LWE_SECRET: SECRET, LWE_ADMIN_TOKEN: ADMIN, LWE_QUIET: "1", ...extra });
 let n = 0;
 const eid = () => `evt-${Date.now().toString(36)}-${++n}-xxxx`;
@@ -52,6 +52,14 @@ describe("startup posture", () => {
     expect(r.status).toBe(2);
     expect(r.stderr).toMatch(/LWE_SECRET is required/);
     expect(base.startsWith("http://127.0.0.1:")).toBe(true);
+  });
+});
+
+describe("NF-03 unsigned mode gating", () => {
+  it("refuses unsigned mode in production or on a non-loopback bind", () => {
+    const run = (extra: Record<string, string>) => spawnSync(process.execPath, [resolve(__dirname, "../../receiver/server.mjs")], { env: { ...process.env, LWE_SECRET: "", LWE_ALLOW_UNSIGNED: "1", PORT: "0", LWE_DB: ":memory:", LWE_QUIET: "1", ...extra }, encoding: "utf8", timeout: 5000 });
+    expect(run({ NODE_ENV: "production" }).status).toBe(2);
+    expect(run({ LWE_HOST: "0.0.0.0" }).status).toBe(2);
   });
 });
 
@@ -147,6 +155,21 @@ describe("storage semantics", () => {
     expect(j).toMatchObject({ title: "SVP", location: "Austin", page_url: "https://www.linkedin.com/in/jane/" });
     expect(j.send_count).toBeGreaterThanOrEqual(2);
     expect(JSON.parse(j.custom_json)).toEqual({ campaign: "q4" });
+  });
+  it("NF-04/NF-05: import provenance URLs are validated and redacted; search URLs lose tracking params and fragments", async () => {
+    const id = eid();
+    const body = JSON.stringify({ schema_version: "1", event: "lead.captured", event_id: id, sent_at: "t", source: { page_type: "salesnav_search", page_url: "https://www.linkedin.com/sales/search/people?query=(keywords%3Acro)&sessionId=S&utm_source=x#f", captured_by: "jai" }, lead: lead({ full_name: "Prov Enance", linkedin_url: "https://www.linkedin.com/in/prov-enance" }), import: { import_id: "imp-hostile-xx", imported_by: "jai", imported_at: "t", import_kind: "manual", search_url: "https://evil.example/steal?x=1", search_name: "n", list_id: null, page: 1 }, custom: {} });
+    expect((await post(body, lweHeaders(body))).json).toEqual({ ok: true, stored: 1 });
+    const s = JSON.stringify({ schema_version: "1", event: "search.captured", event_id: eid(), sent_at: "t", source: { page_type: "salesnav_search", page_url: "u", captured_by: "jai" }, search: { search_url: "https://www.linkedin.com/sales/search/people?query=(keywords%3Aprov)&trkInfo=T&midToken=M&sessionId=S#frag", surface: "sales_navigator", page_type: "salesnav_search", params: {}, query_expression: null, keywords: "prov", filters: {}, total_hint: 1, page: 1, list_id: null, captured_at: "t" }, custom: {} });
+    expect((await post(s, lweHeaders(s))).json).toEqual({ ok: true, stored: 0, search: true });
+    const leads = (await (await fetch(`${base}/leads?limit=500`, { headers: admin })).json()) as any[];
+    expect(leads.find((l) => l.full_name === "Prov Enance").page_url).toBe("https://www.linkedin.com/sales/search/people?query=(keywords%3Acro)");
+    const imports = (await (await fetch(`${base}/imports`, { headers: admin })).json()) as any[];
+    expect(imports.find((i) => i.import_id === "imp-hostile-xx")).toBeDefined();
+    const searches = (await (await fetch(`${base}/searches`, { headers: admin })).json()) as any[];
+    const prov = searches.find((x) => x.keywords === "prov");
+    expect(prov.search_url).toBe("https://www.linkedin.com/sales/search/people?query=(keywords%3Aprov)");
+    expect(prov.search_key).not.toMatch(/trkinfo|midtoken|sessionid|#/);
   });
   it("records import provenance and searches; batch payloads; test events", async () => {
     const imp = { import_id: "imp-9-xxxxxxxx", imported_by: "jai", imported_at: "2026-09-03T00:00:00.000Z", import_kind: "export", search_url: "https://www.linkedin.com/sales/search/people?query=(keywords%3Acro)", search_name: "cro", list_id: null, page: 2 };

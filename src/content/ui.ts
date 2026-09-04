@@ -112,13 +112,18 @@ export function mountPanel(doc: Document, titleText: string, primaryLabel: strin
   };
 }
 
-export function toast(doc: Document, text: string, ms = 2500): void {
+/** Returns a disposer so a mount can cancel the timer on teardown. */
+export function toast(doc: Document, text: string, ms = 2500): () => void {
   const el = doc.createElement("div");
   el.className = "lwe-toast";
   el.setAttribute("role", "status");
   el.textContent = text;
   doc.body.appendChild(el);
-  setTimeout(() => el.remove(), ms);
+  const t = setTimeout(() => el.remove(), ms);
+  return () => {
+    clearTimeout(t);
+    el.remove();
+  };
 }
 
 export interface ExportControls {

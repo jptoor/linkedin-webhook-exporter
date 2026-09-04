@@ -539,3 +539,35 @@ test("two simultaneous sends from two tabs never exceed the daily cap", async ()
   await a.waitForTimeout(500);
   expect(hook.leads.length).toBe(25);
 });
+
+/* AT-27 */
+test("rows appended after scrolling (Next enabled only then) are captured across all pages", async () => {
+  await configure(context, extensionId, { webhookUrl: hook.url, signingSecret: SECRET, dailyCap: 2500, ...FAST });
+  const page = await context.newPage();
+  await page.goto(`${site.origin}/sales/search/people?query=appended`);
+  await expect(page.locator("[data-lwe-row-check]")).toHaveCount(13); // first half only, before any scroll
+  await page.fill("[data-lwe-export-limit]", "2500");
+  await page.locator('[data-lwe-action="export-all"]').click();
+  const job = await waitForJob((j) => j.status === "done", 90_000);
+  expect(job).toMatchObject({ stopReason: "no_more_pages", pagesDone: 3, collected: PAGED_TOTAL, sent: PAGED_TOTAL });
+  await hook.waitFor(PAGED_TOTAL, 30_000);
+});
+
+/* AT-28 */
+test("two simultaneous export starts yield exactly one job", async () => {
+  await configure(context, extensionId, { webhookUrl: hook.url, signingSecret: SECRET, dailyCap: 2500, exportPageDelayMinMs: 3000, exportPageDelayMaxMs: 3000 });
+  const a = await context.newPage();
+  const b = await context.newPage();
+  await a.goto(PAGED());
+  await b.goto(`${site.origin}/sales/search/people?query=paged&page=2`);
+  await expect(a.locator("[data-lwe-row-check]")).toHaveCount(25);
+  await expect(b.locator("[data-lwe-row-check]")).toHaveCount(25);
+  await Promise.all([a.locator('[data-lwe-action="export-all"]').click(), b.locator('[data-lwe-action="export-all"]').click()]);
+  await a.waitForTimeout(1500);
+  const st = await sendMessage(context, extensionId, { type: "EXPORT_STATUS" });
+  expect(st.job).not.toBeNull();
+  expect(st.history).toHaveLength(0);
+  const statuses = await Promise.all([a.locator("[data-lwe-status]").textContent(), b.locator("[data-lwe-status]").textContent()]);
+  expect(statuses.some((s) => /already running/.test(s ?? ""))).toBe(true);
+  await sendMessage(context, extensionId, { type: "EXPORT_STOP" });
+});

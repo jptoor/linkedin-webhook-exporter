@@ -6,7 +6,7 @@ import { makeFakeChrome, messenger } from "./fake-chrome";
 
 const PAGE = { id: "ext-id", url: "https://www.linkedin.com/in/x/", tab: { id: 7, url: "https://www.linkedin.com/in/x/" } };
 const POPUP = { id: "ext-id", url: "chrome-extension://ext-id/popup.html" };
-const lead = (i: number, over: Record<string, unknown> = {}) => ({ full_name: `Person ${i}`, first_name: "Person", last_name: String(i), headline: null, title: "VP", company_name: "Acme", company_linkedin_url: null, location: "Austin", linkedin_url: `https://www.linkedin.com/in/person-${i}`, linkedin_slug: `person-${i}`, linkedin_member_urn: null, sales_navigator_url: null, connection_degree: null, profile_image_url: null, about: null, experience: [], education: [], captured_at: "2026-09-03T00:00:00.000Z", parse_warnings: [], ...over });
+const lead = (i: number, over: Record<string, unknown> = {}) => ({ full_name: `Person ${i}`, full_name_raw: null, first_name: "Person", last_name: String(i), headline: null, title: "VP", company_name: "Acme", company_linkedin_url: null, location: "Austin", linkedin_url: `https://www.linkedin.com/in/person-${i}`, linkedin_slug: `person-${i}`, linkedin_member_urn: null, sales_navigator_url: null, connection_degree: null, profile_image_url: null, about: null, experience: [], education: [], captured_at: "2026-09-03T00:00:00.000Z", parse_warnings: [], ...over });
 
 let fake: ReturnType<typeof makeFakeChrome>;
 let send: ReturnType<typeof messenger>;
@@ -128,6 +128,20 @@ describe("lease recovery and queue commands", () => {
     ];
     const st = await send({ type: "CLEAR_QUEUE", status: "all" }, POPUP);
     expect(st.queue.map((q: any) => q.id)).toEqual(["live-xxxxxxxx"]);
+  });
+});
+
+describe("NF-01 concurrent export start", () => {
+  it("five simultaneous EXPORT_START calls create exactly one job and one tab", async () => {
+    const url = "https://www.linkedin.com/sales/search/people?query=(keywords%3Acro)";
+    const results = await Promise.all(Array.from({ length: 5 }, () => send({ type: "EXPORT_START", url, limit: 50 }, POPUP)));
+    const started = results.filter((r) => !r.error);
+    expect(started).toHaveLength(1);
+    expect(results.filter((r) => r.error === "job_running")).toHaveLength(4);
+    expect(fake.tabs.size).toBe(1);
+    const job = (fake.store.exportJob as any);
+    expect(job.id).toBe(started[0].job.id);
+    expect(job.tabId).toBe(1);
   });
 });
 

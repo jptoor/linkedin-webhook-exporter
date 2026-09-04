@@ -34,7 +34,7 @@
 
 Notes
 
-- The body is the play's `input` verbatim. No envelope.
+- The body is the play's `input` verbatim. It is a flat object that starts with the versioned envelope fields (`schema_version`, `event`, `event_id`, `sent_at`) followed by the Deepline field names; the play type in `linkedin-capture.play.ts` includes them.
 - `x-deepline-dedupe-key` is the lead's canonical LinkedIn URL for unforced
   single sends, so re-sending the same profile returns `"deduped": true` and
   does not start a second run. Forced resends use the event id.

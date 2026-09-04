@@ -1,3 +1,4 @@
+import { cleanName } from "../../shared/normalize";
 import type { LeadRecord, ParseWarning } from "../../shared/types";
 
 export function text(el: Element | null | undefined): string | null {
@@ -26,6 +27,7 @@ export function attr(el: Element | null | undefined, name: string): string | nul
 export function emptyLead(now: string): LeadRecord {
   return {
     full_name: "",
+    full_name_raw: null,
     first_name: null,
     last_name: null,
     headline: null,
@@ -45,6 +47,19 @@ export function emptyLead(now: string): LeadRecord {
     captured_at: now,
     parse_warnings: []
   };
+}
+
+/** Set full_name from rendered text, keeping the raw text when cleaning altered it. */
+export function setName(lead: LeadRecord, rendered: string | null | undefined): void {
+  const raw = cleanTextRaw(rendered);
+  const cleaned = cleanName(rendered) ?? "";
+  lead.full_name = cleaned;
+  lead.full_name_raw = raw && raw !== cleaned ? raw : null;
+}
+function cleanTextRaw(v: string | null | undefined): string | null {
+  if (v == null) return null;
+  const t = String(v).replace(/\s+/g, " ").trim();
+  return t.length ? t.slice(0, 300) : null;
 }
 
 export function warn(lead: LeadRecord, w: ParseWarning): void {

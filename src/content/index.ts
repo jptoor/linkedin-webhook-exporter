@@ -96,7 +96,8 @@ function parseRow(row: HTMLElement, pageType: PageType, now: string): LeadRecord
 async function setupListPage(pageType: PageType): Promise<Mount> {
   const panel: PanelHandles = mountPanel(document, "LinkedIn Webhook Exporter", "Send 0 selected", "Select all on page");
   const rows = new Map<HTMLElement, RowState>();
-  const disposers: Array<() => void> = [() => panel.dispose()];
+  let alive = true;
+  const disposers: Array<() => void> = [() => (alive = false), () => panel.dispose()];
 
   const refreshCount = () => {
     const n = Array.from(rows.values()).filter((r) => r.box.checked).length;
@@ -106,7 +107,7 @@ async function setupListPage(pageType: PageType): Promise<Mount> {
 
   let decorating = false;
   const decorate = async () => {
-    if (decorating) return;
+    if (decorating || !alive) return;
     decorating = true;
     try {
       const found = listRows(document, pageType);
@@ -137,6 +138,7 @@ async function setupListPage(pageType: PageType): Promise<Mount> {
       }
       if (keys.length) {
         const seen = await send<Record<string, boolean>>({ type: "CHECK_DEDUPE", keys });
+        if (!alive) return; // navigated away while waiting
         for (const [el, st] of rows) {
           const lead = parseRow(el, pageType, now);
           if (lead && seen[dedupeKey(lead)]) {
@@ -168,6 +170,7 @@ async function setupListPage(pageType: PageType): Promise<Mount> {
     panel.primary.disabled = true;
     panel.setStatus(`Sending ${leads.length}…`);
     const res = await send<CaptureResponse>({ type: "CAPTURE", leads, pageType, pageUrl: location.href, importId: NEW_ID(), importKind: "manual", pageTitle: document.title });
+    if (!alive) return;
     const s = summarize(res);
     panel.setStatus(s.text, s.kind);
     if (res.ok) {
@@ -175,7 +178,7 @@ async function setupListPage(pageType: PageType): Promise<Mount> {
         r.box.checked = false;
         r.el.classList.add("lwe-sent");
       }
-      toast(document, s.text);
+      disposers.push(toast(document, s.text));
     }
     refreshCount();
   });
@@ -267,13 +270,16 @@ function detectTotalHint(): number | null {
   return parseTotalHint(el?.textContent ?? null);
 }
 
-async function collectPage(): Promise<CollectResponse> {
+async function collectPage(jobId: string, expectedPage: number): Promise<CollectResponse> {
   const pageType = detectPageType(location.pathname);
-  if (!pageType || !isListPage(pageType)) return { ok: false, pageType, pageUrl: location.href, leads: [], hasNext: false, hasNextSource: "none", totalHint: null, error: "not_a_list_page" };
+  const base = { jobId, expectedPage, pageType, pageUrl: location.href, leads: [] as LeadRecord[], hasNext: false, hasNextSource: "none" as const, totalHint: null };
+  if (!pageType || !isListPage(pageType)) return { ...base, ok: false, error: "not_a_list_page" };
   await autoScroll(pageType);
-  const { leads } = parsePage(document, location.href);
+  // The page may have navigated during the scroll; report the URL we parsed.
+  const pageUrl = location.href;
+  const { leads } = parsePage(document, pageUrl);
   const next = detectHasNext(leads.length, pageType);
-  return { ok: true, pageType, pageUrl: location.href, leads, hasNext: next.hasNext, hasNextSource: next.source, totalHint: detectTotalHint(), error: null };
+  return { ...base, ok: true, pageUrl, leads, hasNext: next.hasNext, hasNextSource: next.source, totalHint: detectTotalHint(), error: null };
 }
 
 function describeJob(job: ExportJob): string {
@@ -303,6 +309,7 @@ async function setupExportControls(panel: PanelHandles, pageType: PageType, disp
   disposers.push(stopTimer);
 
   const render = (st: ExportStatusResponse) => {
+    if (!panel.host.isConnected) return stopTimer();
     // Show the finished job too, but only on the tab it ran in.
     const job = st.job ?? (st.thisTab ? st.history[0] ?? null : null);
     const isActive = !!job && (job.status === "running" || job.status === "paused");
@@ -348,7 +355,7 @@ async function setupExportControls(panel: PanelHandles, pageType: PageType, disp
 
 chrome.runtime.onMessage.addListener((m: BackgroundToContent, _s, sendResponse) => {
   if (m?.type === "EXPORT_COLLECT") {
-    collectPage().then(sendResponse, (e) => sendResponse({ ok: false, pageType: null, pageUrl: location.href, leads: [], hasNext: false, hasNextSource: "none", totalHint: null, error: e instanceof Error ? e.message : String(e) }));
+    collectPage(String(m.jobId), Number(m.expectedPage)).then(sendResponse, (e) => sendResponse({ ok: false, jobId: String(m.jobId), expectedPage: Number(m.expectedPage), pageType: null, pageUrl: location.href, leads: [], hasNext: false, hasNextSource: "none", totalHint: null, error: e instanceof Error ? e.message : String(e) }));
     return true;
   }
   if (m?.type === "SEND_CURRENT") active?.sendCurrent?.();

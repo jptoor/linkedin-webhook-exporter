@@ -52,3 +52,28 @@ export function delayedSalesNav(page) {
   </script>`;
   return html.replace("</head>", script + "</head>");
 }
+
+/** Half the rows exist at load; the rest are APPENDED to the list 300 ms
+ *  after the user scrolls near the bottom (true late insertion), and the Next
+ *  control only becomes enabled once all rows are present. */
+export function appendedSalesNav(page) {
+  const html = pagedSalesNav(page);
+  const script = `<script>
+    document.addEventListener('DOMContentLoaded', () => {
+      const ol = document.querySelector('#search-results-container ol');
+      const rows = [...ol.querySelectorAll('li')];
+      const late = rows.slice(Math.ceil(rows.length / 2));
+      late.forEach(r => r.remove());
+      const next = document.querySelector('button[aria-label="Next"]');
+      const wasDisabled = next.disabled; next.disabled = true; next.setAttribute('data-was-disabled', String(wasDisabled));
+      const box = document.querySelector('#search-results-container');
+      let done = false;
+      box.addEventListener('scroll', () => {
+        if (done || box.scrollTop + box.clientHeight < box.scrollHeight - 40) return;
+        done = true;
+        setTimeout(() => { late.forEach(r => ol.appendChild(r)); next.disabled = wasDisabled; }, 300);
+      });
+    });
+  </script>`;
+  return html.replace("</head>", script + "</head>");
+}

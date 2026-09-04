@@ -321,8 +321,9 @@ Content scripts receive only `includeExperience`, `includeEducation`,
 ## 5. Deepline integration
 
 Deepline's inbound webhook is `POST https://code.deepline.com/api/v2/webhooks/inbound/<token>`.
-The JSON body is delivered verbatim as the play's typed `input`; there is no
-envelope. The token in the URL is the credential; the play may additionally
+The JSON body is delivered verbatim as the play's typed `input`. With the
+Deepline preset it is a flat object whose first four fields are the common
+envelope (`schema_version`, `event`, `event_id`, `sent_at`). The token in the URL is the credential; the play may additionally
 require a shared secret (`x-deepline-webhook-secret` or `Authorization: Bearer`)
 or Standard Webhooks HMAC. Deepline dedupes runs on `x-deepline-dedupe-key`
 (falling back to `Idempotency-Key`). Responses are `202` with

@@ -25,6 +25,9 @@ export type BackgroundToContent = { type: "SEND_CURRENT" } | { type: "EXPORT_COL
 
 export interface CollectResponse {
   ok: boolean;
+  /** Echoed from the request so the worker can verify the handshake. */
+  jobId: string | null;
+  expectedPage: number | null;
   pageType: PageType | null;
   pageUrl: string;
   leads: LeadRecord[];

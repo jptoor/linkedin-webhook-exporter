@@ -30,6 +30,8 @@ export type ParseWarning =
 
 export interface LeadRecord {
   full_name: string;
+  /** The name exactly as rendered, when cleaning changed it (badges, credentials, emoji). */
+  full_name_raw: string | null;
   first_name: string | null;
   last_name: string | null;
   headline: string | null;

@@ -1,6 +1,6 @@
 import type { ExperienceEntry, LeadRecord } from "../../shared/types";
 import { canonicalizeCompanyUrl, canonicalizeLinkedInUrl, canonicalizeSalesNavUrl, cleanName, cleanText, memberUrnFromSalesNavUrl, parseConnectionDegree, slugFromCanonical, splitName } from "../../shared/normalize";
-import { attr, emptyLead, firstMatch, looksLikeLocation, text, warn } from "./common";
+import { attr, emptyLead, firstMatch, looksLikeLocation, setName, text, warn } from "./common";
 
 export function isSalesNavSearchPath(pathname: string): boolean {
   return /^\/sales\/search\/people/.test(pathname);
@@ -26,7 +26,7 @@ export function salesNavRows(doc: Document): HTMLElement[] {
 export function parseSalesNavRow(row: HTMLElement, now: string): LeadRecord | null {
   const lead = emptyLead(now);
   const nameEl = firstMatch(row, ['[data-anonymize="person-name"]', '[data-lwe="name"]', 'a[href*="/sales/lead/"]', 'a[href*="/sales/people/"]']);
-  lead.full_name = cleanName(text(nameEl)) ?? "";
+  setName(lead, text(nameEl));
   if (!lead.full_name) return null;
   Object.assign(lead, splitName(lead.full_name));
 
@@ -162,7 +162,7 @@ function nextInOrder(el: Element, root: Element): Element | null {
 export function parseSalesNavLead(doc: Document, pageUrl: string, now = new Date().toISOString()): LeadRecord {
   const lead = emptyLead(now);
   const nameEl = firstMatch(doc, ['h1[data-anonymize="person-name"]', '[data-lwe="name"]', "main h1", "h1"]);
-  lead.full_name = cleanName(text(nameEl)) ?? "";
+  setName(lead, text(nameEl));
   if (!lead.full_name) {
     lead.full_name = cleanName((doc.title || "").replace(/\s*\|\s*Sales Navigator\s*$/, "")) ?? "";
     if (lead.full_name) warn(lead, "name_from_title");

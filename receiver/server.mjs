@@ -32,8 +32,11 @@ const MAX_BODY_BYTES = 1_000_000;
 const REQUEST_TIMEOUT_MS = 15_000;
 const LOG = process.env.LWE_QUIET === "1" ? () => {} : (...a) => console.log("[lwe]", ...a);
 
-if (!SECRET && !ALLOW_UNSIGNED) {
-  console.error("[lwe] LWE_SECRET is required. Set LWE_ALLOW_UNSIGNED=1 only for local development.");
+// Unsigned mode is development-only: it needs the explicit flag, a loopback
+// bind, and NODE_ENV that is not "production" (NF-03).
+const UNSIGNED_OK = ALLOW_UNSIGNED && (HOST === "127.0.0.1" || HOST === "localhost") && process.env.NODE_ENV !== "production";
+if (!SECRET && !UNSIGNED_OK) {
+  console.error(ALLOW_UNSIGNED ? "[lwe] LWE_ALLOW_UNSIGNED=1 is only honored on a loopback bind with NODE_ENV != production." : "[lwe] LWE_SECRET is required. Set LWE_ALLOW_UNSIGNED=1 only for local development.");
   process.exit(2);
 }
 if (HOST !== "127.0.0.1" && HOST !== "localhost" && !ADMIN_TOKEN) console.warn("[lwe] WARNING: binding to a non-loopback host without LWE_ADMIN_TOKEN; read endpoints stay disabled.");
@@ -128,18 +131,6 @@ function linkedinUrl(v, re) {
 const profileUrl = (v) => linkedinUrl(v, /^\/in\/[^/]+\/?$/);
 const salesNavUrl = (v) => linkedinUrl(v, /^\/sales\/lead\/[A-Za-z0-9_-]{8,80}\/?$/);
 const companyUrl = (v) => linkedinUrl(v, /^\/(company|school)\/[^/]+\/?$/);
-function pageUrl(v) {
-  const s = str(v, MAX.url);
-  if (!s) return null;
-  try {
-    const u = new URL(s);
-    if (u.protocol === "https:" && isLinkedInHost(u.hostname)) return s;
-    if (u.protocol === "http:" && (u.hostname === "127.0.0.1" || u.hostname === "localhost")) return s;
-    return null;
-  } catch {
-    return null;
-  }
-}
 function jsonArray(v, max = MAX.json) {
   if (v == null) return null;
   if (Array.isArray(v)) return v.length ? JSON.stringify(v.slice(0, 50)).slice(0, max) : null;
@@ -198,7 +189,7 @@ function normLead(l, source, custom) {
     experience_json: jsonArray(l.experience ?? l.experience_json),
     education_json: jsonArray(l.education ?? l.education_json),
     page_type: PAGE_TYPES.has(source?.page_type) ? source.page_type : null,
-    page_url: pageUrl(source?.page_url),
+    page_url: provenanceUrl(source?.page_url),
     captured_by: str(source?.captured_by, 200),
     custom_json: customJson(custom),
     captured_at: captured && !Number.isNaN(Date.parse(captured)) ? captured : null
@@ -226,15 +217,46 @@ export function extractLeads(payload) {
   return [];
 }
 
-function searchKey(url) {
-  const q = url.indexOf("?");
-  if (q < 0) return url.toLowerCase();
-  const parts = url
+// Same sensitive-parameter list as src/shared/search.ts (NF-05); keep in sync.
+const SENSITIVE_PARAMS = new Set(["sessionid", "_ntb", "trk", "trkinfo", "lici", "licu", "midtoken", "midsig", "trkemail", "otptoken", "eid", "refid", "trackingid", "origin", "originalsubdomain", "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content"]);
+function safeDecode(s) {
+  try {
+    return decodeURIComponent(s.replace(/\+/g, " "));
+  } catch {
+    return s;
+  }
+}
+/** URL without fragment, page, and session/tracking params; used for both
+ *  the stored search_url and the identity key. */
+export function redactSearchUrl(url) {
+  const noHash = url.split("#")[0];
+  const q = noHash.indexOf("?");
+  if (q < 0) return noHash;
+  const parts = noHash
     .slice(q + 1)
-    .split("#")[0]
     .split("&")
-    .filter((kv) => kv && !/^page=/i.test(kv) && !/^(sessionid|_ntb|trk)=/i.test(kv));
-  return (url.slice(0, q) + (parts.length ? "?" + parts.join("&") : "")).toLowerCase();
+    .filter((kv) => {
+      if (!kv) return false;
+      const k = safeDecode(kv.split("=")[0]).toLowerCase();
+      return k !== "page" && !SENSITIVE_PARAMS.has(k);
+    });
+  return noHash.slice(0, q) + (parts.length ? "?" + parts.join("&") : "");
+}
+function searchKey(url) {
+  return redactSearchUrl(url).toLowerCase();
+}
+/** LinkedIn (or loopback) URL for provenance fields, redacted; else null. */
+function provenanceUrl(v) {
+  const s = str(v, MAX.url);
+  if (!s) return null;
+  try {
+    const u = new URL(s);
+    if (u.username || u.password) return null;
+    if ((u.protocol === "https:" && isLinkedInHost(u.hostname)) || (u.protocol === "http:" && /^(127\.0\.0\.1|localhost)$/.test(u.hostname))) return redactSearchUrl(s);
+    return null;
+  } catch {
+    return null;
+  }
 }
 export function extractSearch(payload) {
   const s = payload.search && typeof payload.search === "object" ? payload.search : payload.event === "search.captured" ? payload : null;
@@ -252,7 +274,7 @@ export function extractSearch(payload) {
   const obj = (v, max) => (v && typeof v === "object" ? JSON.stringify(v).slice(0, max) : typeof v === "string" && v.length <= max ? v : null);
   return {
     search_key: searchKey(url),
-    search_url: url,
+    search_url: redactSearchUrl(url),
     surface: s.surface === "sales_navigator" || s.surface === "linkedin" ? s.surface : null,
     page_type: PAGE_TYPES.has(s.page_type) ? s.page_type : null,
     query_expression: str(s.query_expression, 20_000),
@@ -271,7 +293,7 @@ export function extractImport(payload) {
   if (!i) return null;
   const id = str(i.import_id, 64);
   if (!id || !EVENT_ID_RE.test(id)) return null;
-  return { import_id: id, imported_by: str(i.imported_by, 200), imported_at: str(i.imported_at, 40), import_kind: i.import_kind === "export" ? "export" : "manual", search_url: str(i.search_url, MAX.url), search_name: str(i.search_name, 200), list_id: str(i.list_id, 64), page: Number.isInteger(i.page) && i.page > 0 ? i.page : null };
+  return { import_id: id, imported_by: str(i.imported_by, 200), imported_at: str(i.imported_at, 40), import_kind: i.import_kind === "export" ? "export" : "manual", search_url: provenanceUrl(i.search_url), search_name: str(i.search_name, 200), list_id: str(i.list_id, 64), page: Number.isInteger(i.page) && i.page > 0 ? i.page : null };
 }
 
 /* ------------------------------------------------------------ auth */
