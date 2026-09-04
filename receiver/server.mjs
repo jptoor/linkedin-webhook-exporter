@@ -34,9 +34,9 @@ const LOG = process.env.LWE_QUIET === "1" ? () => {} : (...a) => console.log("[l
 
 // Unsigned mode is development-only: it needs the explicit flag, a loopback
 // bind, and NODE_ENV that is not "production" (NF-03).
-const UNSIGNED_OK = ALLOW_UNSIGNED && (HOST === "127.0.0.1" || HOST === "localhost") && process.env.NODE_ENV !== "production";
+const UNSIGNED_OK = ALLOW_UNSIGNED && (HOST === "127.0.0.1" || HOST === "localhost") && process.env.NODE_ENV === "development";
 if (!SECRET && !UNSIGNED_OK) {
-  console.error(ALLOW_UNSIGNED ? "[lwe] LWE_ALLOW_UNSIGNED=1 is only honored on a loopback bind with NODE_ENV != production." : "[lwe] LWE_SECRET is required. Set LWE_ALLOW_UNSIGNED=1 only for local development.");
+  console.error(ALLOW_UNSIGNED ? "[lwe] LWE_ALLOW_UNSIGNED=1 is only honored on a loopback bind with NODE_ENV=development." : "[lwe] LWE_SECRET is required. For local development set NODE_ENV=development LWE_ALLOW_UNSIGNED=1.");
   process.exit(2);
 }
 if (HOST !== "127.0.0.1" && HOST !== "localhost" && !ADMIN_TOKEN) console.warn("[lwe] WARNING: binding to a non-loopback host without LWE_ADMIN_TOKEN; read endpoints stay disabled.");

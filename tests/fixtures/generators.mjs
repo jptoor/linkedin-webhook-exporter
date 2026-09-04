@@ -26,7 +26,7 @@ export function pagedSalesNav(page, opts = {}) {
     </li>`;
   }).join("\n");
   const last = page >= PAGED_PAGES;
-  return `<!doctype html><html><head><meta charset="utf-8"><title>Search | Sales Navigator</title>${opts.head ?? ""}</head><body>
+  return `<!doctype html><html><head><meta charset="utf-8"><title>Search | Sales Navigator</title><style>li.artdeco-list__item{min-height:96px;border-bottom:1px solid #eee}</style>${opts.head ?? ""}</head><body>
   <h2 data-lwe="results-count">${PAGED_TOTAL} results</h2>
   <div id="search-results-container" style="height:600px;overflow-y:auto"><ol class="artdeco-list">${rows}</ol></div>
   <button aria-label="Previous" ${page <= 1 ? "disabled" : ""}>Prev</button>
@@ -76,4 +76,23 @@ export function appendedSalesNav(page) {
     });
   </script>`;
   return html.replace("</head>", script + "</head>");
+}
+
+/** Two pages of exactly 25 rows: the last page is FULL, so only the disabled
+ *  Next control (not the row count) can tell the exporter to stop. The results
+ *  list also sits inside a nested scrolling wrapper. */
+export function fullLastPageSalesNav(page) {
+  const total = 50;
+  const start = (page - 1) * 25;
+  const count = Math.max(0, Math.min(25, total - start));
+  const rows = Array.from({ length: count }, (_, i) => {
+    const n = start + i + 1;
+    return `<li class="artdeco-list__item"><a href="/sales/lead/ACwAAAfull${String(n).padStart(4, "0")}xx,NAME_SEARCH,f${n}"><span data-anonymize="person-name">Full ${n}</span></a><span data-anonymize="title">T${n}</span><a data-anonymize="company-name" href="/sales/company/${n}">C${n}</a><span data-anonymize="location">City ${n}, Country</span></li>`;
+  }).join("\n");
+  const last = page >= 2;
+  return `<!doctype html><html><head><meta charset="utf-8"><title>Search | Sales Navigator</title></head><body>
+  <div style="height:700px;overflow-y:auto"><div style="padding:10px"><h2>${total} results</h2>
+  <div id="search-results-container" style="height:500px;overflow-y:auto"><ol class="artdeco-list">${rows}</ol></div>
+  <button aria-label="Next" ${last ? "disabled" : ""}>Next</button></div></div>
+  </body></html>`;
 }

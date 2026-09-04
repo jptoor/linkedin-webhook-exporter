@@ -59,7 +59,17 @@ describe("NF-03 unsigned mode gating", () => {
   it("refuses unsigned mode in production or on a non-loopback bind", () => {
     const run = (extra: Record<string, string>) => spawnSync(process.execPath, [resolve(__dirname, "../../receiver/server.mjs")], { env: { ...process.env, LWE_SECRET: "", LWE_ALLOW_UNSIGNED: "1", PORT: "0", LWE_DB: ":memory:", LWE_QUIET: "1", ...extra }, encoding: "utf8", timeout: 5000 });
     expect(run({ NODE_ENV: "production" }).status).toBe(2);
-    expect(run({ LWE_HOST: "0.0.0.0" }).status).toBe(2);
+    expect(run({ NODE_ENV: "" }).status).toBe(2); // unset is not development
+    expect(run({ LWE_HOST: "0.0.0.0", NODE_ENV: "development" }).status).toBe(2);
+    const ok = spawn(process.execPath, [resolve(__dirname, "../../receiver/server.mjs")], { env: { ...process.env, LWE_SECRET: "", LWE_ALLOW_UNSIGNED: "1", NODE_ENV: "development", PORT: "0", LWE_DB: ":memory:", LWE_QUIET: "0" }, stdio: ["ignore", "pipe", "pipe"] });
+    return new Promise<void>((res) => {
+      ok.stdout!.on("data", (d) => {
+        if (/UNSIGNED DEV MODE/.test(String(d))) {
+          ok.kill();
+          res();
+        }
+      });
+    });
   });
 });
 

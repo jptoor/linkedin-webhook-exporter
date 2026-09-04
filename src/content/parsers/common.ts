@@ -55,6 +55,7 @@ export function setName(lead: LeadRecord, rendered: string | null | undefined): 
   const cleaned = cleanName(rendered) ?? "";
   lead.full_name = cleaned;
   lead.full_name_raw = raw && raw !== cleaned ? raw : null;
+  if (lead.full_name_raw) warn(lead, "name_cleaned");
 }
 function cleanTextRaw(v: string | null | undefined): string | null {
   if (v == null) return null;

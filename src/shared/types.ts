@@ -26,6 +26,7 @@ export type ParseWarning =
   | "degree_missing"
   | "experience_grouping_uncertain"
   | "sdui_layout"
+  | "name_cleaned"
   | "name_fallback_key";
 
 export interface LeadRecord {

@@ -53,11 +53,13 @@ let active: Mount | null = null;
 async function setupSinglePage(pageType: PageType): Promise<Mount> {
   const panel = mountPanel(document, "LinkedIn Webhook Exporter", "Send to webhook", "Resend");
   panel.secondary.textContent = "Force resend";
+  let alive = true;
   // Attach handlers before any async work so an early click is never lost.
   const doSend = async (force: boolean) => {
     panel.primary.disabled = true;
     panel.setStatus("Reading page…");
     const settings = await getSettings();
+    if (!alive) return;
     const { leads } = parsePage(document, location.href, { includeExperience: settings.includeExperience, includeEducation: settings.includeEducation, includeAbout: settings.includeAbout });
     const lead = leads[0];
     if (!lead || !lead.full_name) {
@@ -66,6 +68,7 @@ async function setupSinglePage(pageType: PageType): Promise<Mount> {
       return;
     }
     const res = await send<CaptureResponse>({ type: "CAPTURE", leads: [lead], pageType, pageUrl: location.href, force, importId: NEW_ID(), importKind: "manual", pageTitle: document.title });
+    if (!alive) return;
     const s = summarize(res);
     panel.setStatus(lead.parse_warnings.length && s.kind === "ok" ? `${s.text} · check: ${lead.parse_warnings.join(", ")}` : s.text, s.kind);
     panel.primary.disabled = false;
@@ -77,9 +80,15 @@ async function setupSinglePage(pageType: PageType): Promise<Mount> {
   if (leads[0]?.full_name) {
     const key = dedupeKey(leads[0]);
     const seen = await send<Record<string, boolean>>({ type: "CHECK_DEDUPE", keys: [key] });
-    if (seen[key]) panel.setStatus("Already sent. Use Force resend to send again.", "warn");
+    if (alive && seen[key]) panel.setStatus("Already sent. Use Force resend to send again.", "warn");
   }
-  return { dispose: () => panel.dispose(), sendCurrent: () => void doSend(false) };
+  return {
+    dispose: () => {
+      alive = false;
+      panel.dispose();
+    },
+    sendCurrent: () => void doSend(false)
+  };
 }
 
 /* ---------- list pages (Sales Nav search/list, people search) ---------- */
@@ -300,6 +309,7 @@ function describeJob(job: ExportJob): string {
 
 async function setupExportControls(panel: PanelHandles, pageType: PageType, disposers: Array<() => void>): Promise<void> {
   const settings = await getSettings();
+  if (!panel.host.isConnected) return; // torn down while settings loaded
   const ctl = mountExportControls(panel, settings.exportDefaultLimit);
   let timer: number | null = null;
   const stopTimer = () => {
@@ -332,6 +342,7 @@ async function setupExportControls(panel: PanelHandles, pageType: PageType, disp
   ctl.start.addEventListener("click", async () => {
     const limit = Math.max(1, Math.min(2500, Number(ctl.limit.value) || settings.exportDefaultLimit));
     const st = await send<ExportStatusResponse & { error?: string }>({ type: "EXPORT_START", url: location.href, limit });
+    if (!panel.host.isConnected) return;
     if (st.error) {
       panel.setStatus(st.error === "no_webhook" ? "No webhook configured. Open the extension options." : st.error === "job_running" ? "Another export is already running." : `Cannot export: ${st.error}`, "err");
       return;

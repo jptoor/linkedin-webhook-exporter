@@ -36,6 +36,13 @@ describe("cleanName: badges, credentials, unicode", () => {
   ])("%s -> %s", (input, expected) => {
     expect(cleanName(input)).toBe(expected);
   });
+  it.each([
+    "Anna-Maria Müller-Lüdenscheidt", "Jean-Luc de la Fontaine", "María José García", "Siobhán O'Neil", "Dr. Dre", "Mary Ann van der Berg", "Ng Wei Ling",
+    "Priya Raman MBA", "Björk", "Nguyễn Thị Minh Khai", "Дмитрий Иванов", "김지수", "محمد بن سلمان", "Ẹ̀mí Adébáyọ̀", "Zoë-Ångström Jr.", "Chris P. Bacon III",
+    "Ana Lucía Pérez de León", "D'Angelo Russell", "Étienne Saint-Exupéry", "Ólafur Ragnar Grímsson", "Sam St. James", "Kenji Tanaka 田中健二"
+  ])("preserves legitimate name %s unchanged", (name) => {
+    expect(cleanName(name)).toBe(name);
+  });
   it("keeps real names that merely contain badge-like words", () => {
     expect(cleanName("Hiring Manager Hillary")).toBe("Hiring Manager Hillary");
     expect(cleanName("Verified Vince Verified Brands")).toBe("Verified Vince Verified Brands");

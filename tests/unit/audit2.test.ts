@@ -31,6 +31,17 @@ describe("NF-07 activity log hygiene", () => {
     const log = append([], { t: 1, kind: "search.saved", msg: `Saved ${u}` });
     expect(log[0].msg).not.toContain("SECRETSESSION");
   });
+  it("redacts recursively and survives an oversized single entry", () => {
+    const r = redact({ nested: { authorization: "Bearer T", deeper: { url: "https://x/?sessionId=S&q=1", list: [{ cookie: "c" }] } } })!;
+    const s = JSON.stringify(r);
+    expect(s).not.toContain("Bearer T");
+    expect(s).not.toContain("sessionId=S");
+    expect(s).not.toContain('"c"');
+    expect(s).toContain("q=1");
+    const big = append([], { t: 1, kind: "error", msg: "m", data: Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`k${i}`, "z".repeat(300)])) }, 1000, 4000);
+    expect(big).toHaveLength(1);
+    expect(big[0].data).toEqual({ truncated: true });
+  });
   it("bounds the log by bytes as well as entries", () => {
     let log: ReturnType<typeof append> = [];
     for (let i = 0; i < 400; i++) log = append(log, { t: i, kind: "error", msg: "x".repeat(300), data: { big: "y".repeat(300) } }, 1000, 20_000);

@@ -76,7 +76,7 @@ curl -H 'Authorization: Bearer admin' localhost:8787/leads
 ```
 
 The receiver binds to loopback, refuses to start without a secret unless
-`LWE_ALLOW_UNSIGNED=1`, and only serves `/leads`, `/searches`, `/imports` when
+`NODE_ENV=development LWE_ALLOW_UNSIGNED=1`, and only serves `/leads`, `/searches`, `/imports` when
 `LWE_ADMIN_TOKEN` is set. It is a reference, not a production service.
 
 ## Export a whole Sales Navigator search

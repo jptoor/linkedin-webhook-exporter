@@ -13,7 +13,7 @@ describe("activity log", () => {
     expect(r.nul).toBeNull();
     expect((r.arr as string[]).length).toBe(50);
     expect((r.arr as string[])[0].length).toBe(200);
-    expect((r.obj as string).length).toBe(300);
+    expect(((r.obj as Record<string, unknown>).deep as string).length).toBe(300); // nested objects are redacted recursively, not stringified
     expect(redact(undefined)).toBeUndefined();
   });
   it("append keeps a bounded ring buffer", () => {

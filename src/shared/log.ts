@@ -56,8 +56,9 @@ function bound(v: string): string {
   return r.length > 300 ? r.slice(0, 299) + "…" : r;
 }
 
-/** Drop anything that looks like a secret, redact URLs, bound sizes. */
-export function redact(data: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+/** Drop anything that looks like a secret, redact URLs, bound sizes.
+ *  Recursive to depth 3 so nested objects get the same treatment. */
+export function redact(data: Record<string, unknown> | undefined, depth = 0): Record<string, unknown> | undefined {
   if (!data) return undefined;
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(data).slice(0, 30)) {
@@ -65,18 +66,26 @@ export function redact(data: Record<string, unknown> | undefined): Record<string
       out[k] = "[redacted]";
       continue;
     }
-    if (typeof v === "string") out[k] = bound(v);
-    else if (typeof v === "number" || typeof v === "boolean" || v === null) out[k] = v;
-    else if (Array.isArray(v)) out[k] = v.slice(0, 50).map((x) => (typeof x === "string" ? redactUrl(x).slice(0, 200) : typeof x === "number" ? x : String(x).slice(0, 100)));
-    else if (v && typeof v === "object") out[k] = JSON.stringify(v).slice(0, 300);
+    out[k] = redactValue(v, depth);
   }
   return out;
 }
+function redactValue(v: unknown, depth: number): unknown {
+  if (typeof v === "string") return bound(v);
+  if (typeof v === "number" || typeof v === "boolean" || v === null) return v;
+  if (Array.isArray(v)) return v.slice(0, 50).map((x) => (typeof x === "string" ? redactUrl(x).slice(0, 200) : typeof x === "number" ? x : x && typeof x === "object" && depth < 3 ? redactValue(x, depth + 1) : String(x).slice(0, 100)));
+  if (v && typeof v === "object") return depth < 3 ? redact(v as Record<string, unknown>, depth + 1) : "[nested]";
+  return undefined;
+}
 
-/** Ring buffer bounded by entry count AND serialized bytes. */
+/** Ring buffer bounded by entry count AND serialized bytes. A single entry
+ *  larger than a quarter of the byte budget keeps its message but drops its
+ *  details, so one huge event can never evict the whole history. */
 export function append(log: LogEntry[], entry: LogEntry, max = LOG_MAX, maxBytes = LOG_MAX_BYTES): LogEntry[] {
   const next = log.length >= max ? log.slice(log.length - max + 1) : log.slice();
-  next.push({ ...entry, msg: redactUrl(entry.msg).slice(0, 300) });
+  let e: LogEntry = { ...entry, msg: redactUrl(entry.msg).slice(0, 300) };
+  if (JSON.stringify(e).length > maxBytes / 4) e = { t: e.t, kind: e.kind, msg: e.msg, data: { truncated: true } };
+  next.push(e);
   let bytes = JSON.stringify(next).length;
   while (bytes > maxBytes && next.length > 1) {
     bytes -= JSON.stringify(next.shift()).length + 1;

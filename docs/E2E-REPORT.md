@@ -1,6 +1,6 @@
 # End-to-end run on sample pages
 
-Date: 2026-09-04T13:49:46.768Z  
+Date: 2026-09-04T13:54:26.135Z  
 Extension: test build loaded unpacked in Chromium 151.0.7922.34  
 Receiver: signed (LWE), admin-token reads, SQLite  
 
@@ -10,7 +10,7 @@ Receiver: signed (LWE), admin-token reads, SQLite
 |---|---|---|
 | options | save + test event | Saved; test event accepted 200 |
 | /in/jane-doe-123/ (classic profile) | Send, then send again | Queued 1; second click reported already sent |
-| /in/zoe-angstrom-å/ (2026 layout) | Send | Queued 1 · 1998 left today · check: sdui_layout, experience_grouping_uncertain |
+| /in/zoe-angstrom-å/ (2026 layout) | Send | Queued 1 · 1998 left today · check: sdui_layout, name_cleaned, experience_grouping_uncertain |
 | /search/results/people/?keywords=chief revenue officer (2026 layout) | Select all (9 rows), send, save search | Queued 9 · 1989 left today; search saved |
 | /sales/search/people?query=paged (3 pages × 25) | Export all, limit 60 | done (limit); pages 3, collected 60, sent 60, skipped 0 |
 | /sales/search/people?query=delayed (rows render 250 ms after scroll) | Export all, limit 25 | done (limit); collected 25, sent 0, skipped 25 (already sent from the paged export) |

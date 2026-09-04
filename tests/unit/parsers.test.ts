@@ -47,7 +47,7 @@ describe("parseProfile (classic)", () => {
   const doc = loadFixture("profile.html", url);
   const lead = parseProfile(doc, url, { now: NOW });
   it("extracts identity fields", () => {
-    expect(lead).toMatchObject({ full_name: "Jane Doe", first_name: "Jane", last_name: "Doe", linkedin_url: "https://www.linkedin.com/in/jane-doe-123", linkedin_slug: "jane-doe-123", connection_degree: "2nd", profile_image_url: "https://media.licdn.com/dms/image/jane.jpg", captured_at: NOW, parse_warnings: [] });
+    expect(lead).toMatchObject({ full_name: "Jane Doe", first_name: "Jane", last_name: "Doe", linkedin_url: "https://www.linkedin.com/in/jane-doe-123", linkedin_slug: "jane-doe-123", connection_degree: "2nd", profile_image_url: "https://media.licdn.com/dms/image/jane.jpg", captured_at: NOW, full_name_raw: "Jane Doe, MBA · 2nd", parse_warnings: ["name_cleaned"] });
   });
   it("extracts headline, location, current role and company", () => {
     expect(lead).toMatchObject({ headline: "VP of Sales at Acme Corp | Building revenue teams", location: "Austin, Texas, United States", title: "VP of Sales", company_name: "Acme Corp", company_linkedin_url: "https://www.linkedin.com/company/12345" });

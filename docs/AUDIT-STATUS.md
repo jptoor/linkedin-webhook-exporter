@@ -6,7 +6,7 @@ not done.
 
 | ID | Status | What changed | Where |
 |---|---|---|---|
-| SEC-01 | Fixed | Receiver binds 127.0.0.1, requires `LWE_SECRET` unless `LWE_ALLOW_UNSIGNED=1`, read routes need `LWE_ADMIN_TOKEN` (404 otherwise), CORS only for an explicit origin | `receiver/server.mjs`; `tests/unit/receiver.test.ts` |
+| SEC-01 | Fixed | Receiver binds 127.0.0.1, requires `LWE_SECRET` unless `NODE_ENV=development LWE_ALLOW_UNSIGNED=1`, read routes need `LWE_ADMIN_TOKEN` (404 otherwise), CORS only for an explicit origin | `receiver/server.mjs`; `tests/unit/receiver.test.ts` |
 | BG-01 | Fixed | Every storage read-modify-write runs under an async mutex; concurrent captures are serialized | `src/background/lock.ts`, `service-worker.ts`; `worker.test.ts` "concurrent captures" |
 | RCV-01 | Fixed | Schema validation with bounded fields, safe JSON-array parsing, one error boundary per request (400/413/500, never a crash) | `receiver/server.mjs`; `receiver.test.ts` "robustness" |
 | LEG-01 | Addressed | README and PRIVACY.md state LinkedIn's prohibition and that no cap/pacing is a safe harbor; competitor-parity framing removed from README; bulk export retained as an explicit, visible, user-started action | `README.md`, `PRIVACY.md` |
@@ -75,3 +75,13 @@ ten new findings it raised:
 | NF-10 | Addressed | Deepline README and SPEC now state that the flat Deepline body starts with the envelope fields | `examples/deepline/README.md`, `docs/SPEC.md` |
 
 Still deliberately open: LEG-01 (bulk export kept; product/legal decision).
+
+## Third pass (docs/AUDIT-3.md) gap closures
+
+| ID | Gap Codex noted | Closed by |
+|---|---|---|
+| NF-03 | Unsigned mode should require an explicit development environment | `NODE_ENV=development` is now required in addition to the flag and a loopback bind; tests cover unset, production, and non-loopback |
+| NF-06 | Heuristics without evidence | `name_cleaned` warning whenever cleaning altered the rendered name; 22-name preservation corpus test in `normalize.test.ts` |
+| NF-07 | Nested objects, oversized entries | Recursive redaction to depth 3; an entry above a quarter of the byte budget keeps its message and drops its details |
+| NF-08 | Single-page mount and setup awaits | Liveness flag on single-page mounts; export controls bail if the panel was torn down while settings loaded |
+| NF-09 | Missing scrolling/pagination fixtures | `fullLastPageSalesNav`: full 25-row last page inside a nested scroller, stop decided by the disabled Next (AT-29); `appendedSalesNav` (AT-27) |

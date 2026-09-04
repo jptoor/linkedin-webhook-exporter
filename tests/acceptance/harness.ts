@@ -74,7 +74,7 @@ export class MockWebhook {
   }
 }
 
-import { pagedSalesNav, delayedSalesNav, appendedSalesNav, sampleName, PAGED_TOTAL as GEN_TOTAL, PAGED_PAGES as GEN_PAGES } from "../fixtures/generators.mjs";
+import { pagedSalesNav, delayedSalesNav, appendedSalesNav, fullLastPageSalesNav, sampleName, PAGED_TOTAL as GEN_TOTAL, PAGED_PAGES as GEN_PAGES } from "../fixtures/generators.mjs";
 /** Name as the parser will emit it: trailing badges/emoji stripped. */
 export const cleanSampleName = (n: number) => sampleName(n).replace(/\s+is reachable$/, "");
 export const PAGED_TOTAL = GEN_TOTAL;
@@ -97,6 +97,9 @@ export class FixtureSite {
       // Paginated Sales Navigator search: ?query=paged&page=N -> 25, 25, 10 rows.
       if (/^\/sales\/search\/people/.test(path) && u.searchParams.get("query") === "paged") {
         return res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(pagedSalesNav(Number(u.searchParams.get("page") ?? "1")));
+      }
+      if (/^\/sales\/search\/people/.test(path) && u.searchParams.get("query") === "fulllast") {
+        return res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(fullLastPageSalesNav(Number(u.searchParams.get("page") ?? "1")));
       }
       if (/^\/sales\/search\/people/.test(path) && u.searchParams.get("query") === "appended") {
         return res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(appendedSalesNav(Number(u.searchParams.get("page") ?? "1")));

@@ -571,3 +571,17 @@ test("two simultaneous export starts yield exactly one job", async () => {
   expect(statuses.some((s) => /already running/.test(s ?? ""))).toBe(true);
   await sendMessage(context, extensionId, { type: "EXPORT_STOP" });
 });
+
+/* AT-29 */
+test("a full last page inside a nested scroller stops on the disabled Next control, not the row count", async () => {
+  await configure(context, extensionId, { webhookUrl: hook.url, signingSecret: SECRET, dailyCap: 2500, ...FAST });
+  const page = await context.newPage();
+  await page.goto(`${site.origin}/sales/search/people?query=fulllast`);
+  await expect(page.locator("[data-lwe-row-check]")).toHaveCount(25);
+  await page.fill("[data-lwe-export-limit]", "2500");
+  await page.locator('[data-lwe-action="export-all"]').click();
+  const job = await waitForJob((j) => j.status === "done", 60_000);
+  expect(job).toMatchObject({ stopReason: "no_more_pages", pagesDone: 2, collected: 50, sent: 50 });
+  await hook.waitFor(50, 30_000);
+  expect(hook.leads.filter((r) => r.json.source.page_url.includes("page=3"))).toHaveLength(0);
+});

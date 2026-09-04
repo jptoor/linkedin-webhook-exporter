@@ -3,7 +3,7 @@
 <style>body{font:15px/1.5 -apple-system,system-ui,sans-serif;max-width:720px;margin:40px auto;padding:0 20px;color:#1C112A} code{background:#f1eff5;padding:1px 5px;border-radius:4px} li{margin:6px 0}</style></head>
 <body>
 <h1>Sample pages</h1>
-<p>Static pages that mimic each LinkedIn surface the extension supports, including the 2026 layout with hashed class names. Load <code>dist-test/</code> as an unpacked extension (built with <code>npm run build:test</code>), point the webhook at <code>http://127.0.0.1:8787/hook</code> from <code>LWE_ALLOW_UNSIGNED=1 npm run receiver</code>, and click around. The same files are the unit and acceptance fixtures.</p>
+<p>Static pages that mimic each LinkedIn surface the extension supports, including the 2026 layout with hashed class names. Load <code>dist-test/</code> as an unpacked extension (built with <code>npm run build:test</code>), point the webhook at <code>http://127.0.0.1:8787/hook</code> from <code>NODE_ENV=development LWE_ALLOW_UNSIGNED=1 npm run receiver</code>, and click around. The same files are the unit and acceptance fixtures.</p>
 <ul>
   <li><a href="/in/jane-doe-123/">Profile, classic layout</a></li>
   <li><a href="/in/zoe-angstrom-%C3%A5/">Profile, 2026 layout (SDUI) with emoji, credentials, grouped roles</a></li>
@@ -11,6 +11,7 @@
   <li><a href="/sales/search/people?query=paged">Sales Navigator search, 3 pages × 25 (messy names)</a></li>
   <li><a href="/sales/search/people?query=delayed">Sales Navigator search with delayed lazy rows</a></li>
   <li><a href="/sales/search/people?query=appended">Sales Navigator search whose second half of rows is appended after scrolling (Next enabled only then)</a></li>
+  <li><a href="/sales/search/people?query=fulllast">Sales Navigator search with a full last page and nested scroller (only the disabled Next says stop)</a></li>
   <li><a href="/sales/lists/people/7263">Sales Navigator lead list (no Next button, 12 rows)</a></li>
   <li><a href="/sales/lead/ACwAAABbedIBfirQHhl0OlHRmfe81tzow0Jjgwg,NAME_SEARCH,vDF-">Sales Navigator lead page (grouped experience, nested heading spans)</a></li>
 </ul>
