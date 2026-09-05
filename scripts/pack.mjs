@@ -9,7 +9,9 @@ if (!existsSync(resolve(dist, "manifest.json"))) throw new Error("run `npm run b
 const manifest = JSON.parse(readFileSync(resolve(dist, "manifest.json"), "utf8"));
 const bad = [...manifest.host_permissions, ...manifest.content_scripts.flatMap((c) => c.matches)].filter((m) => /localhost|127\.0\.0\.1/.test(m));
 if (bad.length) throw new Error(`production manifest contains test hosts: ${bad.join(", ")}`);
-const allowed = new Set(["storage", "alarms"]);
+// storage + alarms: settings, queue, retries. sidePanel: the panel. tabs: follow the
+// active LinkedIn tab and relay panel actions to it. Nothing else, ever.
+const allowed = new Set(["storage", "alarms", "sidePanel", "tabs"]);
 const extra = manifest.permissions.filter((p) => !allowed.has(p));
 if (extra.length) throw new Error(`unexpected permissions: ${extra.join(", ")}`);
 if (!manifest.icons || !manifest.icons["128"]) throw new Error("manifest is missing icons");

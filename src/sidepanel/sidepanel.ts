@@ -39,17 +39,20 @@ function initials(name: string): string {
 function avatar(lead: LeadRecord): HTMLElement {
   const a = document.createElement("span");
   a.className = "avatar";
+  // Initials first; the photo replaces them only once it has actually loaded.
+  a.textContent = initials(lead.full_name);
   if (lead.profile_image_url) {
     const img = document.createElement("img");
-    img.src = lead.profile_image_url;
     img.alt = "";
     img.referrerPolicy = "no-referrer";
-    img.addEventListener("error", () => {
-      img.remove();
-      a.textContent = initials(lead.full_name);
+    img.hidden = true;
+    img.addEventListener("load", () => {
+      a.textContent = "";
+      img.hidden = false;
+      a.appendChild(img);
     });
-    a.appendChild(img);
-  } else a.textContent = initials(lead.full_name);
+    img.src = lead.profile_image_url;
+  }
   return a;
 }
 function whyNot(r: CaptureResponse): string {
