@@ -322,6 +322,9 @@ export interface QueueItem {
   label: string;
   /** Deepline workflow/run id returned by the run API, once accepted. */
   runId: string | null;
+  /** For play runs authorized by the rep's Deepline sign-in: the identity
+   *  (`user|org`) that queued the item. The item is never sent under another. */
+  sessionIdentity?: string | null;
 }
 
 export interface SendResult {

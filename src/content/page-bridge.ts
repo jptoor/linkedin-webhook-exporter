@@ -55,14 +55,19 @@
   const XHR = window.XMLHttpRequest;
   if (XHR && XHR.prototype) {
     const open = XHR.prototype.open;
-    XHR.prototype.open = function (this: XMLHttpRequest & { __lweUrl?: string }, method: string, url: string | URL, ...rest: unknown[]) {
+    XHR.prototype.open = function (this: XMLHttpRequest & { __lweUrl?: string; __lweHooked?: boolean }, method: string, url: string | URL, ...rest: unknown[]) {
       const u = typeof url === "string" ? url : url instanceof URL ? url.href : String(url);
-      if (wanted(u)) {
-        this.__lweUrl = u;
+      // Remember the CURRENT url on every open, so a reused XHR that moves to
+      // a non-matching endpoint is never reported under the old url.
+      this.__lweUrl = wanted(u) ? u : undefined;
+      if (this.__lweUrl && !this.__lweHooked) {
+        this.__lweHooked = true;
         this.addEventListener("load", () => {
+          const current = this.__lweUrl;
+          if (!current) return;
           try {
-            if (this.responseType === "" || this.responseType === "text") emit(u, this.responseText);
-            else if (this.responseType === "json" && this.response != null) emit(u, JSON.stringify(this.response));
+            if (this.responseType === "" || this.responseType === "text") emit(current, this.responseText);
+            else if (this.responseType === "json" && this.response != null) emit(current, JSON.stringify(this.response));
           } catch {
             /* ignore */
           }
@@ -81,6 +86,9 @@
       if (wanted(u)) {
         p.then((res) => {
           try {
+            // Do not buffer bodies that already declare themselves too large.
+            const declared = Number(res.headers.get("content-length") ?? 0);
+            if (declared > MAX_BYTES) return;
             const clone = res.clone();
             clone.text().then((t) => emit(u, t)).catch(() => undefined);
           } catch {
@@ -99,20 +107,27 @@
   const clip = navigator.clipboard;
   if (clip && typeof clip.writeText === "function") {
     const orig = clip.writeText.bind(clip);
+    // The native call goes first, untouched; the link is reported once it
+    // has settled (the page's own error handling is unaffected either way).
     clip.writeText = (text: string) => {
-      share(text);
-      return orig(text);
+      const p = orig(text);
+      p.then(() => share(text), () => share(text));
+      return p;
     };
   }
   if (clip && typeof clip.write === "function") {
     const origWrite = clip.write.bind(clip);
-    clip.write = async (items: ClipboardItems) => {
-      try {
-        for (const item of items) if (item.types.includes("text/plain")) share(await (await item.getType("text/plain")).text());
-      } catch {
-        /* ignore */
-      }
-      return origWrite(items);
+    clip.write = (items: ClipboardItems) => {
+      const p = origWrite(items);
+      const report = async () => {
+        try {
+          for (const item of items) if (item.types.includes("text/plain")) share(await (await item.getType("text/plain")).text());
+        } catch {
+          /* ignore */
+        }
+      };
+      p.then(report, report);
+      return p;
     };
   }
   document.addEventListener(

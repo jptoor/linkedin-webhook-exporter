@@ -99,3 +99,14 @@ describe("ApiIndex + enrichLead", () => {
     expect(idx.lookup(lead({ full_name: "Nobody Here", linkedin_member_urn: null, sales_navigator_url: null }))).toBeNull();
   });
 });
+
+describe("enrichLead honours the About setting", () => {
+  it("never fills `about` from the API when includeAbout is false", async () => {
+    const { enrichLead } = await import("../../src/shared/linkedin-api");
+    const lead = { full_name: "Ada Lovelace", full_name_raw: null, first_name: "Ada", last_name: "Lovelace", headline: null, title: null, company_name: null, company_linkedin_url: null, location: null, linkedin_url: "https://www.linkedin.com/in/ada", linkedin_slug: "ada", linkedin_member_urn: null, sales_navigator_url: null, connection_degree: null, profile_image_url: null, about: null, experience: [], education: [], captured_at: "t", parse_warnings: [] } as LeadRecord;
+    const api = { full_name: "Ada Lovelace", first_name: "Ada", last_name: "Lovelace", headline: "Analyst", title: null, company_name: null, company_linkedin_url: null, location: "London", linkedin_url: "https://www.linkedin.com/in/ada", linkedin_slug: "ada", linkedin_member_urn: null, sales_navigator_url: null, connection_degree: null, profile_image_url: null, about: "Long bio", source: "voyager" as const };
+    expect(enrichLead({ ...lead }, api as never, { includeAbout: false }).about).toBeNull();
+    expect(enrichLead({ ...lead }, api as never, { includeAbout: true }).about).toBe("Long bio");
+    expect(enrichLead({ ...lead }, api as never).headline).toBe("Analyst");
+  });
+});

@@ -45,14 +45,30 @@ export interface TrackEvent {
   properties?: Record<string, unknown>;
 }
 
-const SENSITIVE = /secret|token|password|authorization|cookie|api_?key|email|linkedin_url|full_name|first_name|last_name/i;
+const SENSITIVE = /secret|token|password|authorization|cookie|api_?key|email|linkedin_url|full_name|first_name|last_name|url|href|name/i;
 
-/** Drop anything that looks like a secret or a person from event properties. */
+/** Redact secret- and person-shaped substrings inside free text (error
+ *  messages, stacks, property values): bearer/basic credentials, Deepline
+ *  keys, Standard Webhooks secrets, JWT-looking blobs, e-mail addresses, and
+ *  query strings (which may carry session ids). */
+export function scrubText(v: string, max = 4000): string {
+  return v
+    .replace(/\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{6,}/gi, "$1 [redacted]")
+    .replace(/\bdl_[A-Za-z0-9_-]{4,}/g, "dl_[redacted]")
+    .replace(/\bwhsec_[A-Za-z0-9+/=_-]{4,}/g, "whsec_[redacted]")
+    .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g, "[jwt]")
+    .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, "[email]")
+    .replace(/(https?:\/\/[^\s"'<>?#]+)\?[^\s"'<>]*/g, "$1?[query]")
+    .slice(0, max);
+}
+
+/** Drop anything that looks like a secret or a person from event properties;
+ *  scrub the values that remain. */
 export function scrubProperties(props: Record<string, unknown> | undefined): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(props ?? {})) {
     if (SENSITIVE.test(k)) continue;
-    if (typeof v === "string") out[k] = v.length > 200 ? v.slice(0, 200) : v;
+    if (typeof v === "string") out[k] = scrubText(v, 200);
     else if (typeof v === "number" || typeof v === "boolean" || v === null) out[k] = v;
   }
   return out;
@@ -87,7 +103,7 @@ export async function track(ctx: TelemetryContext, ev: TrackEvent): Promise<{ se
   if (!ctx.enabled || !SEGMENT_KEY) return { sent: false };
   try {
     const f = ctx.fetchImpl ?? fetch;
-    const res = await f(SEGMENT_URL, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Basic ${btoa(SEGMENT_KEY + ":")}` }, body: JSON.stringify(segmentPayload(ctx, ev)), credentials: "omit" });
+    const res = await f(SEGMENT_URL, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Basic ${btoa(SEGMENT_KEY + ":")}` }, body: JSON.stringify(segmentPayload(ctx, ev)), credentials: "omit", redirect: "error" });
     return { sent: res.ok };
   } catch {
     return { sent: false };
@@ -103,16 +119,17 @@ export interface ErrorReport {
 
 /** Body for Deepline's failure-reporting endpoint (shared with the SDK CLI). */
 export function failureReportBody(rep: ErrorReport): Record<string, unknown> {
+  const message = scrubText(rep.message, 4000);
   return {
     command: "chrome-extension",
-    subcommand: rep.where.slice(0, 200),
+    subcommand: scrubText(rep.where, 200),
     cli_version: VERSION,
     failure_kind: "extension_error",
-    failure_code: rep.message.slice(0, 200),
-    failure_stage: rep.where.slice(0, 200),
-    error_class: rep.message.split(":")[0].slice(0, 200),
-    error_body: rep.message.slice(0, 4000),
-    stack_trace: rep.stack ? rep.stack.slice(0, 8000) : null,
+    failure_code: message.slice(0, 200),
+    failure_stage: scrubText(rep.where, 200),
+    error_class: message.split(":")[0].slice(0, 200),
+    error_body: message,
+    stack_trace: rep.stack ? scrubText(rep.stack, 8000) : null,
     log_source: "chrome-extension",
     context: { ...baseProperties(), ...scrubProperties(rep.context) }
   };
@@ -127,7 +144,7 @@ export async function reportError(ctx: TelemetryContext, rep: ErrorReport): Prom
     const f = ctx.fetchImpl ?? fetch;
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (ctx.apiKey) headers.Authorization = `Bearer ${ctx.apiKey}`;
-    const res = await f(`${ctx.baseUrl}/api/v2/cli/report-failure`, { method: "POST", headers, body: JSON.stringify(failureReportBody(rep)), credentials: ctx.apiKey ? "omit" : "include" });
+    const res = await f(`${ctx.baseUrl}/api/v2/cli/report-failure`, { method: "POST", headers, body: JSON.stringify(failureReportBody(rep)), credentials: ctx.apiKey ? "omit" : "include", redirect: "error" });
     return { sent: res.ok };
   } catch {
     return { sent: false };
@@ -139,7 +156,7 @@ export async function reportError(ctx: TelemetryContext, rep: ErrorReport): Prom
 export async function fetchFlags(baseUrl: string | null, fetchImpl: typeof fetch = fetch, defaults: Flags = DEFAULT_FLAGS): Promise<Flags> {
   if (!baseUrl) return { ...defaults };
   try {
-    const res = await fetchImpl(`${baseUrl}/api/v2/extension/flags?version=${encodeURIComponent(VERSION)}`, { credentials: "omit" });
+    const res = await fetchImpl(`${baseUrl}/api/v2/extension/flags?version=${encodeURIComponent(VERSION)}`, { credentials: "omit", redirect: "error" });
     if (!res.ok) return { ...defaults };
     const json = (await res.json()) as Record<string, unknown>;
     const out = { ...defaults };

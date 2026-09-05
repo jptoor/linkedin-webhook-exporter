@@ -57,7 +57,9 @@ export type ContentToBackground =
 export type BackgroundToContent =
   | { type: "SEND_CURRENT" }
   | { type: "PAGE_ACTION"; action: "add_selected" | "add_all" | "clear_page" | "refresh" | "share_search" | "send_current" }
-  | { type: "BASKET_CHANGED"; keys: string[] };
+  | { type: "BASKET_CHANGED"; keys: string[] }
+  /** Settings or remote kill switches changed: re-read content settings. */
+  | { type: "SETTINGS_CHANGED" };
 
 /** Background -> side panel broadcast. */
 export type BackgroundToPanel = { type: "CONTEXT_CHANGED"; tabId: number; context: PageContext } | { type: "BASKET_CHANGED"; keys: string[] } | { type: "STATE_CHANGED" } | { type: "AUTH_CHANGED"; auth: AuthResponse };
@@ -66,7 +68,7 @@ export interface CaptureResponse {
   ok: boolean;
   queued: number;
   skippedDuplicates: string[];
-  rejectedReason: "no_destination" | "daily_cap" | "invalid_url" | "nothing_to_send" | "invalid_message" | "unsupported_by_play" | null;
+  rejectedReason: "no_destination" | "daily_cap" | "invalid_url" | "nothing_to_send" | "invalid_message" | "unsupported_by_play" | "signed_out" | null;
   remainingToday: number;
   /** Which fields the play requires that the page cannot provide. */
   detail?: string | null;
@@ -76,7 +78,7 @@ export interface SearchCaptureResponse {
   ok: boolean;
   queued: boolean;
   duplicate: boolean;
-  rejectedReason: CaptureResponse["rejectedReason"] | "saved_search_needs_share_link";
+  rejectedReason: CaptureResponse["rejectedReason"] | "saved_search_needs_share_link" | "search_import_disabled";
   detail?: string | null;
 }
 

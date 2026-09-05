@@ -26,10 +26,9 @@ const manifest = {
   // storage: settings/queue. alarms: retry schedule. sidePanel: the panel.
   // tabs: read the active tab's URL so the panel follows it (LinkedIn only,
   // via host_permissions) and relay actions to that tab's content script.
-  // cookies: notice Deepline sign-in / sign-out on code.deepline.com only
-  // (the cookie value is never read into extension code; the session is used
-  // through credentials: "include" on requests to that host).
-  permissions: ["storage", "alarms", "sidePanel", "tabs", "cookies"],
+  // No `cookies`: sign-in state is learned from Deepline's session endpoint
+  // with credentials: "include"; the cookie itself is never touched.
+  permissions: ["storage", "alarms", "sidePanel", "tabs"],
   // LinkedIn (content scripts) and Deepline (sign-in, plays) at install.
   // Any other play/webhook host is requested as an optional permission.
   host_permissions: [...matches, "https://code.deepline.com/*"],
@@ -45,7 +44,7 @@ const manifest = {
   action: { default_title: "Deepline for LinkedIn" },
   side_panel: { default_path: "sidepanel.html" },
   // The Deepline web app can ping the extension / open the panel.
-  externally_connectable: { matches: ["https://deepline.com/*", "https://*.deepline.com/*"] },
+  externally_connectable: { matches: ["https://deepline.com/*", "https://www.deepline.com/*", "https://code.deepline.com/*"] },
   options_ui: { page: "options.html", open_in_tab: true },
   commands: {
     "send-current": {

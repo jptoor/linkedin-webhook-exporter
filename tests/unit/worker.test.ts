@@ -325,21 +325,23 @@ describe("state and log", () => {
 
 describe("Deepline sign-in (session) and the web app channel", () => {
   const SESSION = { session: { user: { id: "u1", email: "rep@acme.com", name: "Rep" }, activeOrgId: "org_1" } };
+  const sessionFetch = (session: unknown) => async (url: string) => {
+    if (String(url).endsWith("/api/v2/auth/session")) return new Response(JSON.stringify(session), { status: 200 });
+    if (String(url).includes("/api/v2/plays?")) return new Response(JSON.stringify({ plays: String(url).includes("owned") ? [{ playKey: "acme/warm-intro", name: "warm-intro", displayName: "Warm intro", inputSchema: { properties: { linkedin_url: {}, first_name: {} } } }] : [] }), { status: 200 });
+    if (String(url).endsWith("/api/v2/plays/run")) return new Response(JSON.stringify({ workflowId: "wf_s" }), { status: 202 });
+    return new Response("{}", { status: 200 });
+  };
   beforeEach(async () => {
     await boot({ destinations: [], activeDestinationId: null });
-    (fake.chrome as any).cookies.get = async () => ({ name: "better-auth.session_token" });
-    fetchMock.mockImplementation(async (url: string) => {
-      if (String(url).endsWith("/api/v2/auth/session")) return new Response(JSON.stringify(SESSION), { status: 200 });
-      if (String(url).includes("/api/v2/plays?")) return new Response(JSON.stringify({ plays: String(url).includes("owned") ? [{ playKey: "acme/warm-intro", name: "warm-intro", displayName: "Warm intro", inputSchema: { properties: { linkedin_url: {}, first_name: {} } } }] : [] }), { status: 200 });
-      if (String(url).endsWith("/api/v2/plays/run")) return new Response(JSON.stringify({ workflowId: "wf_s" }), { status: 202 });
-      return new Response("{}", { status: 200 });
-    });
+    fetchMock.mockImplementation(sessionFetch(SESSION));
   });
-  it("reports the signed-in user from the cookie session and lists plays without an API key", async () => {
+  it("reports the signed-in user from the session endpoint (no cookies API) and lists plays without an API key", async () => {
+    expect((fake.chrome as Record<string, unknown>).cookies).toBeUndefined();
     const a = await send({ type: "GET_AUTH", refresh: true }, PANEL);
     expect(a).toMatchObject({ signedIn: true, email: "rep@acme.com", orgId: "org_1", baseUrl: "https://code.deepline.com" });
     const sessionCall = fetchMock.mock.calls.find(([u]) => String(u).endsWith("/auth/session"))!;
     expect((sessionCall[1] as RequestInit).credentials).toBe("include");
+    expect((sessionCall[1] as RequestInit).redirect).toBe("error");
     const r = await send({ type: "LIST_PLAYS" }, PANEL);
     expect(r.ok).toBe(true);
     const listCall = fetchMock.mock.calls.find(([u]) => String(u).includes("/api/v2/plays?origin=owned"))!;
@@ -347,7 +349,7 @@ describe("Deepline sign-in (session) and the web app channel", () => {
     expect(((listCall[1] as RequestInit).headers as Record<string, string>).Authorization).toBeUndefined();
     expect(log().some((e) => e.kind === "auth.changed" && /Signed in/.test(e.msg))).toBe(true);
   });
-  it("adds a play with the sign-in and runs it with the session cookie, never a bearer header", async () => {
+  it("adds a play with the sign-in and runs it with the session, never a bearer header; the item is bound to the identity", async () => {
     await send({ type: "GET_AUTH", refresh: true }, PANEL);
     const st = await send({ type: "ADD_PLAY_DESTINATION", playKey: "acme/warm-intro", playName: "Warm intro", inputSchema: { properties: { linkedin_url: {}, first_name: {} } }, activate: true }, PANEL);
     expect(st.settings.destinations[0]).toMatchObject({ kind: "deepline_play", playKey: "acme/warm-intro", apiKey: "", input: { mode: "mapped", acceptsLeads: true } });
@@ -359,26 +361,63 @@ describe("Deepline sign-in (session) and the web app channel", () => {
     expect((run[1] as RequestInit).credentials).toBe("include");
     expect(((run[1] as RequestInit).headers as Record<string, string>).Authorization).toBeUndefined();
     expect(JSON.parse((run[1] as RequestInit).body as string)).toEqual({ name: "acme/warm-intro", input: { linkedin_url: "https://www.linkedin.com/in/person-1", first_name: "Person" } });
-    expect(queue()[0]).toMatchObject({ status: "sent", runId: "wf_s" });
+    expect(queue()[0]).toMatchObject({ status: "sent", runId: "wf_s", sessionIdentity: "u1|org_1" });
   });
-  it("a signed-out rep gets a plain reason instead of a run", async () => {
-    (fake.chrome as any).cookies.get = async () => null;
-    fetchMock.mockImplementation(async (url: string) => new Response(String(url).includes("/api/v2/plays") ? '{"error":"Unauthorized"}' : "{}", { status: String(url).includes("/api/v2/plays") ? 401 : 200 }));
+  it("a signed-out rep gets a plain reason instead of a run, for pushes and for search imports", async () => {
+    await send({ type: "GET_AUTH", refresh: true }, PANEL);
+    await send({ type: "ADD_PLAY_DESTINATION", playKey: "acme/warm-intro", playName: "Warm intro", inputSchema: { properties: { linkedin_url: {}, search_url: {} } }, activate: true }, PANEL);
+    fetchMock.mockImplementation(async (url: string) => (String(url).includes("/api/v2/plays") ? new Response('{"error":"Unauthorized"}', { status: 401 }) : sessionFetch({ session: null })(url)));
     const a = await send({ type: "GET_AUTH", refresh: true }, PANEL);
     expect(a.signedIn).toBe(false);
-    expect(fetchMock.mock.calls.some(([u]) => String(u).endsWith("/auth/session"))).toBe(false); // no cookie, no call
     const r = await send({ type: "LIST_PLAYS" }, PANEL);
     expect(r).toMatchObject({ ok: false, error: "Not signed in to Deepline" });
+    const c = await send({ type: "CAPTURE", leads: [lead(2)], pageType: "profile", pageUrl: "https://www.linkedin.com/in/y/" }, PAGE);
+    expect(c).toMatchObject({ ok: false, rejectedReason: "signed_out", queued: 0 });
+    const sc = await send({ type: "SEARCH_CAPTURE", url: "https://www.linkedin.com/sales/search/people?query=(keywords:cro)", pageType: "salesnav_search" }, PAGE);
+    expect(sc).toMatchObject({ ok: false, rejectedReason: "signed_out" });
+    expect(fetchMock.mock.calls.some(([u]) => String(u).endsWith("/plays/run"))).toBe(false);
   });
-  it("cookie changes on the Deepline host refresh the session; others are ignored", async () => {
+  it("a queued run is never sent under a different account: sign-out or account switch before the retry fails it permanently", async () => {
     await send({ type: "GET_AUTH", refresh: true }, PANEL);
-    const before = fetchMock.mock.calls.filter(([u]) => String(u).endsWith("/auth/session")).length;
-    for (const fn of fake.listeners.cookieChanged) await fn({ cookie: { name: "li_at", domain: "www.linkedin.com" }, removed: false });
+    await send({ type: "ADD_PLAY_DESTINATION", playKey: "acme/warm-intro", playName: "Warm intro", inputSchema: { properties: { linkedin_url: {} } }, activate: true }, PANEL);
+    // First attempt hits a 503 so the item is retried later.
+    let runs = 0;
+    fetchMock.mockImplementation(async (url: string) => {
+      if (String(url).endsWith("/api/v2/plays/run")) {
+        runs++;
+        return new Response("", { status: 503 });
+      }
+      return sessionFetch(SESSION)(url);
+    });
+    await send({ type: "CAPTURE", leads: [lead(3)], pageType: "profile", pageUrl: "https://www.linkedin.com/in/z/" }, PAGE);
     await flushed();
-    expect(fetchMock.mock.calls.filter(([u]) => String(u).endsWith("/auth/session")).length).toBe(before);
-    for (const fn of fake.listeners.cookieChanged) await fn({ cookie: { name: "better-auth.session_token", domain: "code.deepline.com" }, removed: true });
+    expect(queue()[0]).toMatchObject({ status: "pending", attempts: 1, sessionIdentity: "u1|org_1" });
+    expect(runs).toBe(1);
+    // Another user signs in to Deepline in the same browser before the retry.
+    fetchMock.mockImplementation(async (url: string) => {
+      if (String(url).endsWith("/api/v2/plays/run")) {
+        runs++;
+        return new Response(JSON.stringify({ workflowId: "wf_other" }), { status: 202 });
+      }
+      return sessionFetch({ session: { user: { id: "u2", email: "other@acme.com" }, activeOrgId: "org_2" } })(url);
+    });
+    await send({ type: "GET_AUTH", refresh: true }, PANEL);
+    await send({ type: "RETRY_NOW" }, PANEL);
     await flushed();
-    expect(fetchMock.mock.calls.filter(([u]) => String(u).endsWith("/auth/session")).length).toBe(before + 1);
+    expect(runs).toBe(1); // the retry never went out
+    expect(queue()[0]).toMatchObject({ status: "failed", lastError: "account_changed" });
+    expect(log().some((e) => e.kind === "send.failed" && /account_changed/.test(e.msg))).toBe(true);
+  });
+  it("a Deepline tab finishing a load refreshes the session; LinkedIn tabs do not", async () => {
+    await send({ type: "GET_AUTH", refresh: true }, PANEL);
+    const count = () => fetchMock.mock.calls.filter(([u]) => String(u).endsWith("/auth/session")).length;
+    const before = count();
+    for (const fn of fake.listeners.tabUpdated) await fn(1, { status: "complete" }, { id: 1, url: "https://www.linkedin.com/in/x/" });
+    await flushed();
+    expect(count()).toBe(before);
+    for (const fn of fake.listeners.tabUpdated) await fn(2, { status: "complete" }, { id: 2, url: "https://code.deepline.com/sign-in?next=/plays" });
+    await flushed();
+    expect(count()).toBe(before + 1);
   });
   it("the web app channel answers ping / auth state only from Deepline origins", async () => {
     const external = (msg: unknown, sender: Record<string, unknown>) => new Promise<any>((resolve) => fake.listeners.messageExternal[0](msg, sender, resolve));
@@ -387,7 +426,10 @@ describe("Deepline sign-in (session) and the web app channel", () => {
     expect(await external({ type: "ping" }, { url: "http://deepline.com/app", origin: "http://deepline.com" })).toEqual({ error: "forbidden" });
     const ok = await external({ type: "ping" }, { url: "https://code.deepline.com/app", origin: "https://code.deepline.com" });
     expect(ok).toMatchObject({ ok: true, version: "test", signedIn: true });
-    expect(await external({ type: "get_auth_state" }, { url: "https://deepline.com/", origin: "https://deepline.com" })).toMatchObject({ signedIn: true, email: "rep@acme.com" });
+    // Auth state is a boolean plus the host: no e-mail, name or org leaves the extension this way.
+    expect(await external({ type: "get_auth_state" }, { url: "https://deepline.com/", origin: "https://deepline.com" })).toEqual({ signedIn: true, baseUrl: "https://code.deepline.com" });
+    // Exact hosts only: an arbitrary subdomain is not trusted.
+    expect(await external({ type: "get_auth_state" }, { url: "https://staging.deepline.com/", origin: "https://staging.deepline.com" })).toEqual({ error: "forbidden" });
     expect(await external({ type: "steal" }, { url: "https://deepline.com/", origin: "https://deepline.com" })).toEqual({ error: "unknown message" });
     expect(log().filter((e) => e.kind === "external.message")).toHaveLength(3);
   });

@@ -1,5 +1,5 @@
 import type { BackgroundToContent, BasketResponse, CaptureResponse, ContentSettingsResponse, PageContext } from "../shared/messages";
-import { ApiIndex, enrichLead } from "../shared/linkedin-api";
+import { ApiIndex, enrichLead, isInterceptedUrl } from "../shared/linkedin-api";
 import { dedupeKey } from "../shared/normalize";
 import { isSensitiveParam, savedSearchIdFrom, searchName } from "../shared/search";
 import type { LeadRecord, PageType } from "../shared/types";
@@ -8,6 +8,16 @@ import { makePick, mountPanel, setPicked, toast } from "./ui";
 
 const send = <T,>(msg: unknown): Promise<T> => chrome.runtime.sendMessage(msg) as Promise<T>;
 const NEW_ID = () => crypto.randomUUID();
+
+/** Only a real click by the rep may push, select or open anything. Page
+ *  scripts can dispatch synthetic clicks into our (open) shadow root; those
+ *  arrive with `isTrusted === false` and are ignored. */
+const onTrustedClick = (el: HTMLElement, fn: (e: MouseEvent) => void): void => {
+  el.addEventListener("click", (e) => {
+    if (!e.isTrusted) return;
+    fn(e);
+  });
+};
 
 function describeRejection(r: CaptureResponse): string {
   switch (r.rejectedReason) {
@@ -23,6 +33,8 @@ function describeRejection(r: CaptureResponse): string {
       return "This is not a page the extension can read.";
     case "unsupported_by_play":
       return r.detail ?? "This play does not take people.";
+    case "signed_out":
+      return "Sign in to Deepline first (open the panel).";
     default:
       return "Rejected.";
   }
@@ -59,7 +71,17 @@ function destinationLabel(s: ContentSettingsResponse, count = 0): string {
  *  Voyager). Rebuilt per route so a new search starts clean. */
 let apiIndex = new ApiIndex();
 let interceptEnabled = true;
+let includeAbout = true;
 let lastStatsAt = 0;
+
+/** Apply the content settings the worker hands us (operator settings with
+ *  the remote kill switches applied). Turning interception off also drops
+ *  everything already observed. */
+function applyContentSettings(s: ContentSettingsResponse): void {
+  interceptEnabled = s.intercept;
+  includeAbout = s.includeAbout;
+  if (!interceptEnabled) apiIndex = new ApiIndex();
+}
 const onApiData: Array<() => void> = [];
 
 function ingestApi(url: string, text: string): void {
@@ -77,15 +99,43 @@ function ingestApi(url: string, text: string): void {
 
 /** DOM parse first; the API fills what the DOM could not render. */
 function enrich(lead: LeadRecord | null): LeadRecord | null {
-  return lead ? enrichLead(lead, apiIndex.lookup(lead)) : lead;
+  return lead ? enrichLead(lead, apiIndex.lookup(lead), { includeAbout }) : lead;
 }
 
+/** Bridge messages arrive over window.postMessage, which any script on the
+ *  page can also send. They are treated as untrusted input: a response is
+ *  ingested only for a same-origin URL on the allow-list, a share link only
+ *  when a saved search is open and the link is a same-origin Sales Navigator
+ *  search URL, and everything is re-validated by the worker afterwards. */
+function sameOriginUrl(raw: string): string | null {
+  try {
+    const u = new URL(raw, location.origin);
+    return u.origin === location.origin ? u.href : null;
+  } catch {
+    return null;
+  }
+}
+/** Share links are absolute LinkedIn URLs even when the page itself is a
+ *  test fixture on another origin; accept LinkedIn or the page's own origin. */
+function linkedInUrl(raw: string): string | null {
+  try {
+    const u = new URL(raw, location.origin);
+    return u.origin === location.origin || (u.protocol === "https:" && (u.hostname === "www.linkedin.com" || u.hostname === "linkedin.com")) ? u.href : null;
+  } catch {
+    return null;
+  }
+}
 window.addEventListener("message", (e) => {
   if (e.source !== window || e.origin !== location.origin || !e.data || typeof e.data !== "object") return;
   const d = e.data as Record<string, unknown>;
-  if (d.channel !== "LWE_BRIDGE") return;
-  if (d.event === "INTERCEPTED_DATA" && typeof d.url === "string" && typeof d.responseText === "string") ingestApi(d.url, d.responseText);
-  else if (d.event === "SHARE_LINK" && typeof d.url === "string") void send({ type: "SHARE_LINK", url: d.url }).catch(() => undefined);
+  if (d.channel !== "LWE_BRIDGE" || typeof d.url !== "string") return;
+  if (d.event === "INTERCEPTED_DATA") {
+    const url = sameOriginUrl(d.url);
+    if (url && isInterceptedUrl(url) && typeof d.responseText === "string" && d.responseText.length <= 2_000_000) ingestApi(url, d.responseText);
+  } else if (d.event === "SHARE_LINK") {
+    const url = linkedInUrl(d.url);
+    if (url && /\/sales\/search\//.test(url) && url.includes("query=") && savedSearchIdFrom(location.href)) void send({ type: "SHARE_LINK", url }).catch(() => undefined);
+  }
 });
 // Tell the bridge we are listening so responses that landed before document_idle are replayed.
 try {
@@ -117,6 +167,7 @@ interface Mount {
   sendCurrent?: () => void;
   action?: (a: Extract<BackgroundToContent, { type: "PAGE_ACTION" }>["action"]) => Promise<PageContext | null>;
   basketChanged?: (keys: string[]) => void;
+  settingsChanged?: () => void;
 }
 let active: Mount | null = null;
 
@@ -159,13 +210,13 @@ async function setupSinglePage(pageType: PageType): Promise<Mount> {
     if (!alive) return;
     panel.setStatus(r.added ? `Selected. ${r.count} so far.` : "Already selected.", r.added ? "ok" : "warn");
   };
-  panel.primary.addEventListener("click", () => void doSend(false));
-  panel.secondary.addEventListener("click", () => void addToBasket());
-  panel.tertiary.addEventListener("click", () => void doSend(true));
-  panel.openPanel.addEventListener("click", () => void send({ type: "OPEN_SIDE_PANEL" }));
+  onTrustedClick(panel.primary, () => void doSend(false));
+  onTrustedClick(panel.secondary, () => void addToBasket());
+  onTrustedClick(panel.tertiary, () => void doSend(true));
+  onTrustedClick(panel.openPanel, () => void send({ type: "OPEN_SIDE_PANEL" }));
   const relabel = () => void getSettings().then((s) => {
     if (!alive) return;
-    interceptEnabled = s.intercept;
+    applyContentSettings(s);
     panel.primary.textContent = destinationLabel(s);
     panel.primary.disabled = false;
   });
@@ -189,6 +240,7 @@ async function setupSinglePage(pageType: PageType): Promise<Mount> {
       onApiData.splice(onApiData.indexOf(onApi), 1);
       panel.dispose();
     },
+    settingsChanged: relabel,
     sendCurrent: () => void doSend(false),
     action: async (a) => {
       if (a === "send_current") await doSend(false);
@@ -232,7 +284,7 @@ async function setupListPage(pageType: PageType): Promise<Mount> {
   const relabel = () => void getSettings().then((s) => {
     if (!alive) return;
     settingsCache = s;
-    interceptEnabled = s.intercept;
+    applyContentSettings(s);
     refresh();
   });
   const onSettingsChange = (changes: Record<string, unknown>) => {
@@ -310,14 +362,14 @@ async function setupListPage(pageType: PageType): Promise<Mount> {
         const pick = makePick(document, lead.first_name ?? lead.full_name);
         const key = dedupeKey(lead);
         const st: RowState = { el, pick, key, lead, native: nativeCheckbox(el) };
-        pick.addEventListener("click", (e) => {
+        onTrustedClick(pick, (e) => {
           e.preventDefault();
           e.stopPropagation();
           void toggle(st, !basketKeys.has(st.key));
         });
         if (st.native) {
-          const onNative = () => {
-            if (!alive) return;
+          const onNative = (e: Event) => {
+            if (!alive || !e.isTrusted) return;
             const want = !!st.native?.checked;
             if (want !== basketKeys.has(st.key)) void toggle(st, want);
           };
@@ -416,7 +468,11 @@ async function setupListPage(pageType: PageType): Promise<Mount> {
             ? "This saved search is private. Open the side panel to make it importable."
             : r.rejectedReason === "unsupported_by_play"
               ? "This destination takes individual people, not whole searches. Choose a search-ready destination in the panel."
-              : "Could not start the search import.";
+              : r.rejectedReason === "signed_out"
+                ? "Sign in to Deepline first (open the panel)."
+                : r.rejectedReason === "search_import_disabled"
+                  ? "Search import is paused for this version of the extension."
+                  : "Could not start the search import.";
       panel.setStatus(why, "err");
     } else panel.setStatus(r.duplicate ? "This search was already imported." : `Search import started (up to ${limit ?? settings.searchDefaultLimit} people). You can keep working.`, r.duplicate ? "warn" : "ok");
   };
@@ -428,10 +484,10 @@ async function setupListPage(pageType: PageType): Promise<Mount> {
     return true;
   };
 
-  panel.secondary.addEventListener("click", () => void addAll());
-  panel.primary.addEventListener("click", () => void sendBasket());
-  panel.tertiary.addEventListener("click", () => void sendSearch());
-  panel.openPanel.addEventListener("click", () => void send({ type: "OPEN_SIDE_PANEL" }));
+  onTrustedClick(panel.secondary, () => void addAll());
+  onTrustedClick(panel.primary, () => void sendBasket());
+  onTrustedClick(panel.tertiary, () => void sendSearch());
+  onTrustedClick(panel.openPanel, () => void send({ type: "OPEN_SIDE_PANEL" }));
 
   const b = await send<BasketResponse>({ type: "BASKET_GET" }).catch(() => ({ items: [] as BasketResponse["items"], count: 0, pages: 0 }));
   if (!alive) return { dispose: () => disposers.splice(0).forEach((d) => d()) };
@@ -469,6 +525,7 @@ async function setupListPage(pageType: PageType): Promise<Mount> {
   });
   return {
     dispose: () => disposers.splice(0).forEach((d) => d()),
+    settingsChanged: relabel,
     basketChanged: (keys) => {
       basketKeys = new Set(keys);
       refresh();
@@ -499,6 +556,7 @@ chrome.runtime.onMessage.addListener((m: BackgroundToContent, _s, sendResponse) 
   }
   if (m?.type === "BASKET_CHANGED") active?.basketChanged?.(Array.isArray(m.keys) ? m.keys.filter((k): k is string => typeof k === "string") : []);
   if (m?.type === "SEND_CURRENT") active?.sendCurrent?.();
+  if (m?.type === "SETTINGS_CHANGED") active?.settingsChanged?.();
   return false;
 });
 

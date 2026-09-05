@@ -27,11 +27,14 @@ or navigates on its own.
 ## Deepline sign-in
 
 When you sign in to Deepline in a normal tab, the extension is signed in too.
-It has the `cookies` permission for `code.deepline.com` only and uses it to
-notice whether your Deepline session cookie exists (sign-in / sign-out). The
-cookie's value is never read into extension code and never stored; Chrome
-attaches it to requests the extension makes to Deepline. Alternatively you
-can paste an API key under Advanced; that key is stored in this browser only.
+It has no `cookies` permission at all: it asks Deepline's session endpoint
+who is signed in, and Chrome attaches your session cookie to that request
+and to play runs by itself. The cookie's value is never read into extension
+code and never stored. Anything you queue while signed in is tied to that
+account and organisation; if you sign out or switch accounts before it is
+sent, it fails instead of going out under the other account. Alternatively
+you can paste an API key under Advanced; that key is stored in this browser
+only.
 
 ## Where it sends data
 
@@ -90,9 +93,9 @@ extension) deletes everything.
 
 `storage` and `alarms` (settings, queue, retries), `sidePanel` (the panel,
 offered on LinkedIn tabs only), `tabs` (so the panel can follow the LinkedIn
-tab you are on and relay your clicks to it), `cookies` (Deepline sign-in
-state, scoped to `code.deepline.com`), LinkedIn hosts, `code.deepline.com`,
-and one optional host per webhook.
+tab you are on and relay your clicks to it), LinkedIn hosts,
+`code.deepline.com`, and one optional host per webhook. No `cookies`, no
+`scripting`, no `<all_urls>`.
 
 ## Legal responsibility
 

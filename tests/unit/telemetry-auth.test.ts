@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fetchSession, hasSessionCookie, isSessionCookieChange, signInUrl } from "../../src/background/auth";
-import { failureReportBody, fetchFlags, reportError, scrubProperties, segmentPayload, track, type TelemetryContext } from "../../src/shared/telemetry";
+import { fetchSession, identityKey, isDeeplineTab, signInUrl } from "../../src/background/auth";
+import { failureReportBody, fetchFlags, reportError, scrubProperties, scrubText, segmentPayload, track, type TelemetryContext } from "../../src/shared/telemetry";
 import { makeFakeChrome } from "./fake-chrome";
 
 const ctx = (over: Partial<TelemetryContext> = {}): TelemetryContext => ({ enabled: true, anonymousId: "anon-1", userId: "u1", orgId: "o1", baseUrl: "https://code.deepline.com", apiKey: null, ...over });
@@ -58,35 +58,45 @@ describe("telemetry", () => {
 });
 
 describe("session auth", () => {
-  const cookies = (present: boolean) => ({ get: async () => (present ? { name: "better-auth.session_token" } : null) }) as unknown as typeof chrome.cookies;
-  it("is signed out without the session cookie and never calls the API then", async () => {
-    const fetchImpl = vi.fn();
-    const s = await fetchSession("https://code.deepline.com", fetchImpl as unknown as typeof fetch, cookies(false));
-    expect(s).toMatchObject({ signedIn: false, baseUrl: "https://code.deepline.com", error: null });
-    expect(fetchImpl).not.toHaveBeenCalled();
-    expect(await hasSessionCookie("https://code.deepline.com", cookies(true))).toBe(true);
-  });
-  it("reads the user and active org from /api/v2/auth/session using credentials: include", async () => {
+  it("asks the session endpoint with credentials: include and no cookies API; reads the user and active org", async () => {
     let init: RequestInit | undefined;
     const fetchImpl = (async (u: string, i: RequestInit) => {
       init = i;
       expect(u).toBe("https://code.deepline.com/api/v2/auth/session");
       return new Response(JSON.stringify({ session: { user: { id: "u1", email: "jai@deepline.com", name: "Jai" }, activeOrgId: "org_1" } }), { status: 200 });
     }) as unknown as typeof fetch;
-    const s = await fetchSession("https://code.deepline.com/", fetchImpl, cookies(true));
-    expect(s).toMatchObject({ signedIn: true, userId: "u1", email: "jai@deepline.com", name: "Jai", orgId: "org_1" });
+    const s = await fetchSession("https://code.deepline.com/", fetchImpl);
+    expect(s).toMatchObject({ signedIn: true, userId: "u1", email: "jai@deepline.com", name: "Jai", orgId: "org_1", baseUrl: "https://code.deepline.com" });
     expect(init?.credentials).toBe("include");
     expect(init?.redirect).toBe("error");
-    const anon = await fetchSession("https://code.deepline.com", (async () => new Response(JSON.stringify({ session: null }), { status: 200 })) as unknown as typeof fetch, cookies(true));
-    expect(anon.signedIn).toBe(false);
-    const down = await fetchSession("https://code.deepline.com", (async () => new Response("", { status: 503 })) as unknown as typeof fetch, cookies(true));
+    expect(init?.cache).toBe("no-store");
+    const anon = await fetchSession("https://code.deepline.com", (async () => new Response(JSON.stringify({ session: null }), { status: 200 })) as unknown as typeof fetch);
+    expect(anon).toMatchObject({ signedIn: false, error: null });
+    const down = await fetchSession("https://code.deepline.com", (async () => new Response("", { status: 503 })) as unknown as typeof fetch);
     expect(down).toMatchObject({ signedIn: false, error: "HTTP 503" });
+    const boom = await fetchSession("https://code.deepline.com", (async () => Promise.reject(new TypeError("Failed to fetch"))) as unknown as typeof fetch);
+    expect(boom).toMatchObject({ signedIn: false, error: "Failed to fetch" });
   });
-  it("only reacts to session cookie changes on the Deepline host; sign-in URL is on the base", () => {
-    expect(isSessionCookieChange({ cookie: { name: "better-auth.session_token", domain: "code.deepline.com" } }, "https://code.deepline.com")).toBe(true);
-    expect(isSessionCookieChange({ cookie: { name: "__Secure-better-auth.session_token", domain: ".deepline.com" } }, "https://code.deepline.com")).toBe(true);
-    expect(isSessionCookieChange({ cookie: { name: "better-auth.session_token", domain: "evil.example" } }, "https://code.deepline.com")).toBe(false);
-    expect(isSessionCookieChange({ cookie: { name: "li_at", domain: "code.deepline.com" } }, "https://code.deepline.com")).toBe(false);
+  it("identity binds user and org; Deepline tabs are recognised by exact origin; sign-in URL is on the base", () => {
+    expect(identityKey({ signedIn: true, userId: "u1", orgId: "org_1" })).toBe("u1|org_1");
+    expect(identityKey({ signedIn: true, userId: "u1", orgId: null })).toBe("u1|");
+    expect(identityKey({ signedIn: false, userId: "u1", orgId: "org_1" })).toBeNull();
+    expect(identityKey(null)).toBeNull();
+    expect(isDeeplineTab("https://code.deepline.com/sign-in", "https://code.deepline.com")).toBe(true);
+    expect(isDeeplineTab("https://code.deepline.com.evil.example/", "https://code.deepline.com")).toBe(false);
+    expect(isDeeplineTab("http://code.deepline.com/", "https://code.deepline.com")).toBe(false);
+    expect(isDeeplineTab(undefined, "https://code.deepline.com")).toBe(false);
     expect(signInUrl("https://code.deepline.com/")).toBe("https://code.deepline.com/sign-in");
+  });
+  it("scrubs secrets, e-mails and query strings out of free text", () => {
+    const t = scrubText("Bearer dl_abcdef123 failed for jai@deepline.com at https://code.deepline.com/x?sessionId=S1 whsec_QUJD token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijklmnop");
+    expect(t).not.toMatch(/dl_abcdef123|jai@|sessionId=S1|whsec_QUJD|eyJhbGci/);
+    expect(t).toContain("Bearer [redacted]");
+    expect(t).toContain("[email]");
+    expect(t).toContain("https://code.deepline.com/x?[query]");
+    expect(t).toContain("[jwt]");
+    const body = failureReportBody({ where: "flush", message: "Error: 401 for rep@acme.com", stack: "at fetch (https://code.deepline.com/api?sessionId=S)", context: { url: "https://x/?sessionId=1", count: 2 } });
+    expect(JSON.stringify(body)).not.toMatch(/rep@acme|sessionId=/);
+    expect(body).toMatchObject({ error_body: "Error: 401 for [email]", context: { count: 2 } });
   });
 });

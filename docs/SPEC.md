@@ -201,15 +201,24 @@ data lands. Off switch: Settings `intercept`; remote kill flag `intercept`.
 
 ### 4.2g Deepline sign-in (session)
 
-Like Frontier picking up its web app's cookies, the extension treats the
-rep's Deepline sign-in as its credential. `cookies` permission is scoped to
-the Deepline host; only the presence of `better-auth.session_token` is
-checked. `GET /api/v2/auth/session` with `credentials: "include"` returns
-the user and active org; `chrome.cookies.onChanged` refreshes state and
-broadcasts `AUTH_CHANGED`. Plays are listed and run the same way (no
-`Authorization` header, cookie attached by Chrome). A play destination with
-an empty `apiKey` means "use my sign-in"; the panel's picker adds such
-plays directly (`ADD_PLAY_DESTINATION`). API keys remain an Advanced option.
+Like Frontier picking up its web app's session, the extension treats the
+rep's Deepline sign-in as its credential, but without the `cookies`
+permission: `GET /api/v2/auth/session` with `credentials: "include"` returns
+the user and active org, and Chrome attaches the cookie itself. State is
+re-checked when the panel opens, when a tab on the Deepline origin finishes
+loading (a sign-in or sign-out just happened), and at most every minute
+before a session-mode run goes out. Every queue item created on the sign-in
+carries `sessionIdentity` (`user|org`); at send time the item is failed with
+`signed_out` / `account_changed` if the current identity differs, so a
+retry never runs under another account. Captures and search imports are
+rejected with `signed_out` when there is no session. Plays are listed and
+run the same way (no `Authorization` header). A play destination with an
+empty `apiKey` means "use my sign-in"; the panel's picker adds such plays
+directly (`ADD_PLAY_DESTINATION`). API keys remain an Advanced option.
+Remote flags are enforced: `session_auth` off makes the extension signed
+out and refuses session-mode play listing; `search_import` off rejects
+search imports with `search_import_disabled`; `intercept` off is applied on
+top of the operator's setting and clears what was already observed.
 The side panel is enabled per tab only on LinkedIn URLs
 (`chrome.sidePanel.setOptions`). The Deepline web app may send `ping`,
 `get_auth_state` and `open_side_panel` through `externally_connectable`
@@ -433,11 +442,20 @@ step.
   300 s), and uniqueness (event id) before touching a database. The bundled
   receiver does all three and writes with parameterized SQL only.
 - Permissions: `storage`, `alarms`, `sidePanel`, `tabs` (to follow the
-  active LinkedIn tab and relay panel actions to it), `cookies` (Deepline
-  sign-in state, scoped by host permission to `code.deepline.com`), LinkedIn
-  hosts, `code.deepline.com`, and one optional host per destination granted
-  at save time. No `<all_urls>`, no `scripting`. `docs/RISK-REVIEW.md`
-  compares this surface with Frontier's line by line.
+  active LinkedIn tab and relay panel actions to it), LinkedIn hosts,
+  `code.deepline.com`, and one optional host per destination granted at
+  save time. No `cookies`, no `<all_urls>`, no `scripting`.
+  `docs/RISK-REVIEW.md` compares this surface with Frontier's line by line.
+- Only real user gestures drive the on-page UI: dock buttons, row pills and
+  the mirrored native checkbox ignore events with `isTrusted === false`, so
+  a page script cannot push, select or open the panel. Bridge messages are
+  untrusted input: responses are ingested only for same-origin allow-listed
+  URLs, share links only for a LinkedIn Sales Navigator search URL while a
+  saved search is open, and the worker re-validates both again.
+- The web-app channel (`externally_connectable`) accepts exact hosts only
+  (`deepline.com`, `www.deepline.com`, `code.deepline.com`, the configured
+  base); `get_auth_state` returns `{ signedIn, baseUrl }` and nothing about
+  the user.
 - The API key is the credential for play runs; it is blanked in everything a
   content script or the side panel can read, and never logged.
 - No third-party scripts, fonts, or network calls. The MAIN-world helper

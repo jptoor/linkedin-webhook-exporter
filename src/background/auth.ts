@@ -1,13 +1,13 @@
-/** Deepline sign-in through the browser session, the way Frontier picks up
- *  its web app's `credentials.*` cookies: the rep signs in to Deepline once in
- *  a normal tab and the extension is signed in too. No API key to paste.
+/** Deepline sign-in through the browser session: the rep signs in to Deepline
+ *  once in a normal tab and the extension is signed in too. No API key to
+ *  paste, and no `cookies` permission either.
  *
  *  Mechanics: the extension has host permission for the Deepline base URL, so
  *  a `fetch(..., { credentials: "include" })` from the worker carries the
- *  `better-auth.session_token` cookie and Deepline's `requireAuth` falls back
- *  to that session. The `cookies` permission is scoped to the same host and
- *  is used only to notice sign-in / sign-out promptly. The cookie value is
- *  never read into extension code; only its presence is checked. */
+ *  session cookie and Deepline's `requireAuth` falls back to that session.
+ *  The extension never reads the cookie; it only asks `/api/v2/auth/session`
+ *  who the session belongs to, and re-asks when a Deepline tab finishes
+ *  loading, when the panel opens, or when a run comes back 401. */
 import { normalizeBaseUrl } from "../shared/deepline";
 
 export interface SessionState {
@@ -21,27 +21,12 @@ export interface SessionState {
   error: string | null;
 }
 
-const COOKIE_NAMES = ["__Secure-better-auth.session_token", "better-auth.session_token"];
-
-export async function hasSessionCookie(baseUrl: string, cookies: typeof chrome.cookies | undefined = chrome.cookies): Promise<boolean> {
-  if (!cookies?.get) return true; // cannot tell; let the session call decide
-  for (const name of COOKIE_NAMES) {
-    try {
-      if (await cookies.get({ url: baseUrl, name })) return true;
-    } catch {
-      /* no permission for that host: fall through */
-    }
-  }
-  return false;
-}
-
 /** Ask Deepline who the session belongs to. */
-export async function fetchSession(baseUrlRaw: string, fetchImpl: typeof fetch = fetch, cookies?: typeof chrome.cookies): Promise<SessionState> {
+export async function fetchSession(baseUrlRaw: string, fetchImpl: typeof fetch = fetch): Promise<SessionState> {
   const baseUrl = normalizeBaseUrl(baseUrlRaw);
   const base: SessionState = { signedIn: false, baseUrl, userId: null, email: null, name: null, orgId: null, checkedAt: Date.now(), error: null };
-  if (!(await hasSessionCookie(baseUrl, cookies))) return base;
   try {
-    const res = await fetchImpl(`${baseUrl}/api/v2/auth/session`, { credentials: "include", headers: { Accept: "application/json" }, redirect: "error" });
+    const res = await fetchImpl(`${baseUrl}/api/v2/auth/session`, { credentials: "include", headers: { Accept: "application/json" }, redirect: "error", cache: "no-store" });
     if (!res.ok) return { ...base, error: `HTTP ${res.status}` };
     const json = (await res.json()) as { session?: { user?: { id?: string; email?: string; name?: string }; activeOrgId?: string | null; session?: { activeOrganizationId?: string | null } } | null };
     const s = json.session;
@@ -56,14 +41,18 @@ export function signInUrl(baseUrl: string): string {
   return `${normalizeBaseUrl(baseUrl)}/sign-in`;
 }
 
-/** True when a cookie change concerns the Deepline session. */
-export function isSessionCookieChange(change: { cookie: { name: string; domain: string } }, baseUrl: string): boolean {
-  let host = "";
+/** True when a tab URL is on the Deepline base host (a sign-in or sign-out
+ *  may just have happened there). */
+export function isDeeplineTab(url: string | undefined, baseUrl: string): boolean {
   try {
-    host = new URL(baseUrl).hostname;
+    return !!url && new URL(url).origin === normalizeBaseUrl(baseUrl);
   } catch {
     return false;
   }
-  const d = change.cookie.domain.replace(/^\./, "");
-  return COOKIE_NAMES.includes(change.cookie.name) && (host === d || host.endsWith(`.${d}`));
+}
+
+/** The identity a queued run was authorized under: user + org. A run must
+ *  not be sent under a different identity than the one that queued it. */
+export function identityKey(s: Pick<SessionState, "signedIn" | "userId" | "orgId"> | null): string | null {
+  return s?.signedIn && s.userId ? `${s.userId}|${s.orgId ?? ""}` : null;
 }

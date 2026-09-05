@@ -694,9 +694,9 @@ test("sign-in flow: a Deepline session cookie signs the panel in, plays load wit
   await panel.locator('[data-lwe-play="acme/warm-intro"]').click();
   await expect(panel.locator("#ctaStatus")).toHaveText(/Connected Warm intro/);
   await expect(panel.locator("#cta")).toHaveText("Push Jane to Warm intro");
-  const lists = dl.sessionCalls.length;
-  expect(lists).toBeGreaterThan(0);
-  expect(dl.sessionCalls.every((c) => c.cookie.includes("tok_123") && c.authorization === null)).toBe(true);
+  // Session checks carry the cookie (once it exists) and never a bearer header.
+  expect(dl.sessionCalls.some((c) => c.cookie.includes("tok_123"))).toBe(true);
+  expect(dl.sessionCalls.every((c) => c.authorization === null)).toBe(true);
   await panel.click("#cta");
   const [run] = await dl.waitForRuns(1);
   expect(run.headers.cookie).toContain("better-auth.session_token=tok_123");
@@ -705,4 +705,37 @@ test("sign-in flow: a Deepline session cookie signs the panel in, plays load wit
   const storage = await readStorage(context, extensionId);
   expect(storage.settings.destinations[0]).toMatchObject({ kind: "deepline_play", apiKey: "", playKey: "acme/warm-intro" });
   expect(JSON.stringify(storage)).not.toContain("tok_123"); // the cookie value never enters extension storage
+});
+
+/* AT-32 */
+test("page scripts cannot drive the extension: synthetic clicks and forged bridge messages are ignored, real clicks still work", async () => {
+  await configure(context, extensionId, { url: hook.url, signingSecret: SECRET, dailyCap: 2500 });
+  const page = await context.newPage();
+  await page.goto(PAGED());
+  await expect(pills(page)).toHaveCount(25);
+  await expect(push(page)).toHaveText(/Push/);
+  const before = hook.received.length;
+  // A hostile page script: synthetic clicks on a row pill and on every dock button, plus a forged bridge response.
+  await page.evaluate(() => {
+    const host = document.querySelector("[data-lwe-panel]")!;
+    const inDock = (sel: string) => host.shadowRoot?.querySelector<HTMLElement>(sel) ?? host.querySelector<HTMLElement>(sel);
+    document.querySelector<HTMLElement>("[data-lwe-row-check]")!.click();
+    inDock('[data-lwe-action="select-all"]')!.click();
+    inDock('[data-lwe-action="send"]')!.click();
+    inDock('[data-lwe-action="send"]')!.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));
+    window.postMessage({ channel: "LWE_BRIDGE", event: "INTERCEPTED_DATA", url: "/not/allowed", responseText: JSON.stringify({ elements: [{ fullName: "Forged Person", entityUrn: "urn:li:fs_salesProfile:(ACwAAAforged,NAME_SEARCH,x)" }] }) }, location.origin);
+    window.postMessage({ channel: "LWE_BRIDGE", event: "SHARE_LINK", url: "https://www.linkedin.com/sales/search/people?query=(keywords:forged)" }, location.origin);
+  });
+  await page.waitForTimeout(1200);
+  await expect(pills(page).first()).toHaveAttribute("aria-label", /^Select/);
+  expect(hook.received.length).toBe(before);
+  const storage = await readStorage(context, extensionId);
+  expect(JSON.stringify(storage)).not.toContain("forged");
+  // The rep's own click still selects and pushes.
+  await pills(page).first().click();
+  await expect(pills(page).first()).toHaveAttribute("aria-label", /^Remove/);
+  await clickPush(page);
+  const [got] = await hook.waitFor(before + 1);
+  expect(got).toBeTruthy();
+  expect(JSON.stringify(hook.received.slice(before))).not.toContain("Forged");
 });

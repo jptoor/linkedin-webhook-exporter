@@ -149,6 +149,20 @@ export function buildSearchRecord(url: string, pageType: PageType, totalHint: nu
   };
 }
 
+/** A page URL safe to put in an outbound payload: session and tracking
+ *  parameters removed, the page number kept (unlike `searchKey`). */
+export function cleanPageUrl(url: string): string {
+  const hashIdx = url.indexOf("#");
+  const noHash = hashIdx >= 0 ? url.slice(0, hashIdx) : url;
+  const q = noHash.indexOf("?");
+  if (q < 0) return noHash;
+  const parts = noHash
+    .slice(q + 1)
+    .split("&")
+    .filter((kv) => kv && !isSensitiveParam(safeDecode(kv.split("=")[0])));
+  return parts.length ? `${noHash.slice(0, q)}?${parts.join("&")}` : noHash.slice(0, q);
+}
+
 /** A Sales Navigator search opened from a saved search carries only the id;
  *  the query expression lives server-side and only resolves for its owner.
  *  Such a URL cannot be handed to a backend provider as-is. */

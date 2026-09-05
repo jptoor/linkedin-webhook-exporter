@@ -11,8 +11,8 @@ export function backoffFor(attempt: number): number {
   return BACKOFF_MS[Math.min(Math.max(attempt, 1) - 1, BACKOFF_MS.length - 1)];
 }
 
-export function newItem(id: string, body: string, leadUrls: string[], leadCount: number, now: number, dedupeKey: string, dest: Pick<Destination, "id" | "kind">, label = ""): QueueItem {
-  return { id, createdAt: now, nextAttemptAt: now, attempts: 0, status: "pending", body, leadUrls, leadCount, dedupeKey, lastError: null, lastStatus: null, sendingAt: null, destinationId: dest.id, destinationKind: dest.kind, label, runId: null };
+export function newItem(id: string, body: string, leadUrls: string[], leadCount: number, now: number, dedupeKey: string, dest: Pick<Destination, "id" | "kind">, label = "", sessionIdentity: string | null = null): QueueItem {
+  return { id, createdAt: now, nextAttemptAt: now, attempts: 0, status: "pending", body, leadUrls, leadCount, dedupeKey, lastError: null, lastStatus: null, sendingAt: null, destinationId: dest.id, destinationKind: dest.kind, label, runId: null, sessionIdentity };
 }
 
 export function due(items: QueueItem[], now: number): QueueItem[] {

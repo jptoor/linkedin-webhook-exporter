@@ -283,7 +283,12 @@ function nameKey(name: string, company: string | null): string {
  *  the source of truth for anything it read cleanly; API values only fill
  *  nulls, replace fields the parser flagged as guessed, and add the public
  *  profile URL Sales Navigator never renders. */
-export function enrichLead(lead: LeadRecord, api: ApiPerson | null): LeadRecord {
+export interface EnrichOptions {
+  /** Honour the operator's "include About" setting: never fill `about` when false. */
+  includeAbout?: boolean;
+}
+
+export function enrichLead(lead: LeadRecord, api: ApiPerson | null, opts: EnrichOptions = {}): LeadRecord {
   if (!api) return lead;
   const warn = new Set(lead.parse_warnings);
   const out: LeadRecord = { ...lead, parse_warnings: [...lead.parse_warnings] };
@@ -306,7 +311,7 @@ export function enrichLead(lead: LeadRecord, api: ApiPerson | null): LeadRecord 
   fill("location", api.location, warn.has("location_guessed") || warn.has("location_missing"));
   fill("connection_degree", api.connection_degree);
   fill("profile_image_url", api.profile_image_url);
-  fill("about", api.about);
+  if (opts.includeAbout !== false) fill("about", api.about);
   if (api.linkedin_url && !out.linkedin_url) {
     out.linkedin_url = api.linkedin_url;
     out.linkedin_slug = api.public_identifier;

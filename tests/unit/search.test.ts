@@ -69,3 +69,12 @@ describe("buildSearchRecord / searchName / searchKey", () => {
     expect(searchKey("https://x/y?")).toBe("https://x/y");
   });
 });
+
+describe("cleanPageUrl", () => {
+  it("drops session and tracking params but keeps the page number", async () => {
+    const { cleanPageUrl } = await import("../../src/shared/search");
+    expect(cleanPageUrl("https://www.linkedin.com/sales/search/people?page=3&query=(keywords:cro)&sessionId=S1&trk=x#frag")).toBe("https://www.linkedin.com/sales/search/people?page=3&query=(keywords:cro)");
+    expect(cleanPageUrl("https://www.linkedin.com/in/ada/?sessionId=S1")).toBe("https://www.linkedin.com/in/ada/");
+    expect(cleanPageUrl("https://www.linkedin.com/in/ada/")).toBe("https://www.linkedin.com/in/ada/");
+  });
+});

@@ -74,6 +74,8 @@ function whyNot(r: CaptureResponse): string {
       return "This is not a page the extension can read.";
     case "unsupported_by_play":
       return r.detail ?? "This play does not take people.";
+    case "signed_out":
+      return "Sign in to Deepline first.";
     default:
       return "Could not push.";
   }
@@ -560,6 +562,8 @@ $("sendSearch").addEventListener("click", async () => {
     setTimeout(renderCta, 21_000);
   } else if (r.ok) note($("searchNote"), "This search was already imported. Tick “Allow people already sent” to import it again.", "warn");
   else if (r.rejectedReason === "saved_search_needs_share_link") note($("searchNote"), "This saved search is private. Get the shareable link first (above).", "warn");
+  else if (r.rejectedReason === "signed_out") note($("searchNote"), "Sign in to Deepline first.", "err");
+  else if (r.rejectedReason === "search_import_disabled") note($("searchNote"), "Search import is paused for this version of the extension.", "warn");
   else note($("searchNote"), r.detail ?? whyNot({ ok: false, queued: 0, skippedDuplicates: [], rejectedReason: r.rejectedReason as CaptureResponse["rejectedReason"], remainingToday: state?.remainingToday ?? 0 }), "err");
   await refreshState();
 });
@@ -589,7 +593,8 @@ chrome.tabs.onUpdated.addListener((id, info) => {
 });
 
 void refreshState();
-void refreshAuth();
+// A fresh check on every open: the rep may have signed in or out since.
+void refreshAuth(true);
 void loadContext();
 void refreshBasket();
 setInterval(() => void refreshState(), 5000);

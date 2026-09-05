@@ -169,9 +169,10 @@ keep the daily cap low and make sure you have a lawful basis for processing
 the people you push. Nothing here is a safe harbor. You are responsible for
 how you use this tool.
 
-Detection surface, for the record: `cookies` is scoped to `code.deepline.com`
-(sign-in state only), no `<all_urls>`, no `scripting`, no unsolicited fetches
-to LinkedIn, on-page UI in a shadow root, every push is a real user click.
+Detection surface, for the record: no `cookies` permission, no `<all_urls>`,
+no `scripting`, no unsolicited fetches to LinkedIn, on-page UI in a shadow
+root, and every push is a real user click (synthetic clicks from page scripts
+are ignored).
 The page-context bridge patches `XMLHttpRequest` and `fetch` to observe the
 responses LinkedIn's own page loads (see `docs/RISK-REVIEW.md` for what that
 means for account risk) and the link "Share search" copies.

@@ -28,7 +28,6 @@ export function makeFakeChrome() {
   const broadcasts: unknown[] = [];
   const chrome = {
     runtime: { id: "ext-id", onMessage: on("message"), onMessageExternal: on("messageExternal"), onStartup: on("startup"), onInstalled: on("installed"), getURL: (p: string) => `chrome-extension://ext-id/${p}`, sendMessage: async (m: unknown) => void broadcasts.push(m) },
-    cookies: { get: async () => null, onChanged: on("cookieChanged") },
     storage: { local: area(store), session: area(sessionStore) },
     alarms: { create: async (name: string, info: unknown) => void alarms.set(name, info), clear: async (name: string) => alarms.delete(name), onAlarm: on("alarm") },
     tabs: {
