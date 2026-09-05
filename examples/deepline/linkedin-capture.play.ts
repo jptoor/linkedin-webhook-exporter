@@ -62,7 +62,7 @@ type CapturedLead = {
   import_id?: string | null;
   imported_by?: string | null;
   imported_at?: string | null;
-  import_kind?: 'manual' | 'export' | null;
+  import_kind?: 'manual' | 'basket' | 'search' | null;
   import_search_url?: string | null;
   import_search_name?: string | null;
   import_list_id?: string | null;
@@ -111,7 +111,7 @@ function validate(input: unknown): CapturedLead {
     import_id: str(i.import_id, 64),
     imported_by: str(i.imported_by, 200),
     imported_at: str(i.imported_at, 40),
-    import_kind: i.import_kind === 'export' ? 'export' : 'manual',
+    import_kind: i.import_kind === 'basket' ? 'basket' : i.import_kind === 'search' ? 'search' : 'manual',
     import_search_url: str(i.import_search_url, 2048),
     import_search_name: str(i.import_search_name, 200),
     import_list_id: str(i.import_list_id, 64),

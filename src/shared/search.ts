@@ -124,13 +124,14 @@ export function parseSalesNavQuery(expr: string | null): { filters: Record<strin
   return { filters, keywords: kw || null };
 }
 
-export function buildSearchRecord(url: string, pageType: PageType, totalHint: number | null, now: string): SearchRecord {
+export function buildSearchRecord(url: string, pageType: PageType, totalHint: number | null, now: string, limit: number | null = null): SearchRecord {
   const params = decodeParams(url);
   const surface = pageType.startsWith("salesnav") ? "sales_navigator" : "linkedin";
   const queryExpression = params.query ?? null;
   const parsed = surface === "sales_navigator" ? parseSalesNavQuery(queryExpression) : { filters: {}, keywords: params.keywords ?? null };
   const list = url.match(/\/sales\/lists\/people\/([^/?#]+)/);
   const page = Number(params.page ?? params.Page ?? "1");
+  const saved = params.savedSearchId ?? params.savedsearchid ?? null;
   return {
     search_url: searchKey(url),
     page_type: pageType,
@@ -140,10 +141,21 @@ export function buildSearchRecord(url: string, pageType: PageType, totalHint: nu
     keywords: parsed.keywords,
     filters: parsed.filters,
     total_hint: totalHint,
+    limit: typeof limit === "number" && Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : null,
     page: Number.isFinite(page) && page >= 1 ? Math.floor(page) : 1,
     list_id: list ? list[1].slice(0, 64) : null,
+    saved_search_id: saved && /^[0-9]{1,20}$/.test(saved) ? saved : null,
     captured_at: now
   };
+}
+
+/** A Sales Navigator search opened from a saved search carries only the id;
+ *  the query expression lives server-side and only resolves for its owner.
+ *  Such a URL cannot be handed to a backend provider as-is. */
+export function savedSearchIdFrom(url: string): string | null {
+  const params = decodeParams(url);
+  const id = params.savedSearchId ?? null;
+  return id && /^[0-9]{1,20}$/.test(id) && !params.query ? id : null;
 }
 
 /** Human label for an import: keywords + filters for Sales Navigator searches,

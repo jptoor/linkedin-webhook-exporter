@@ -18,30 +18,34 @@ const matches = isTest ? [...linkedinMatches, ...testMatches] : linkedinMatches;
 
 const manifest = {
   manifest_version: 3,
-  name: "LinkedIn Webhook Exporter",
+  name: "Deepline for LinkedIn",
+  short_name: "Deepline",
   version: pkg.version,
-  description: "Send LinkedIn and Sales Navigator leads to any webhook, Deepline play, or CRM list. Open source, by Deepline.",
+  description: "Push people from LinkedIn and Sales Navigator into a Deepline play, or hand a whole search to Deepline to fetch. Open source.",
   minimum_chrome_version: "116",
-  permissions: ["storage", "alarms"],
-  // Only LinkedIn is requested at install. The webhook URL the user
+  // storage: settings/queue. alarms: retry schedule. sidePanel: the panel.
+  // tabs: read the active tab's URL so the panel follows it (LinkedIn only,
+  // via host_permissions) and relay actions to that tab's content script.
+  permissions: ["storage", "alarms", "sidePanel", "tabs"],
+  // Only LinkedIn is requested at install. The play/webhook host the user
   // configures is requested as an optional host permission at save time.
   host_permissions: matches,
   optional_host_permissions: ["https://*/*", "http://localhost/*", "http://127.0.0.1/*"],
   background: { service_worker: "background.js", type: "module" },
   content_scripts: [
-    {
-      matches,
-      js: ["content.js"],
-      css: ["content.css"],
-      run_at: "document_idle"
-    }
+    { matches, js: ["content.js"], css: ["content.css"], run_at: "document_idle" },
+    // MAIN-world helper: hands the link copied by Sales Navigator's "Share
+    // search" to the content script (saved searches only resolve for their
+    // owner; the share link carries the full query a backend can run).
+    { matches, js: ["main-world.js"], run_at: "document_start", world: "MAIN" }
   ],
-  action: { default_popup: "popup.html", default_title: "LinkedIn Webhook Exporter" },
+  action: { default_title: "Deepline for LinkedIn" },
+  side_panel: { default_path: "sidepanel.html" },
   options_ui: { page: "options.html", open_in_tab: true },
   commands: {
     "send-current": {
       suggested_key: { default: "Alt+Shift+L" },
-      description: "Send the current LinkedIn profile to the webhook"
+      description: "Push the person on the current page"
     }
   },
   icons: { "16": "icons/icon16.png", "48": "icons/icon48.png", "128": "icons/icon128.png" }
@@ -52,8 +56,9 @@ await build({
   entryPoints: {
     background: "src/background/service-worker.ts",
     content: "src/content/index.ts",
+    "main-world": "src/content/main-world.ts",
     options: "src/options/options.ts",
-    popup: "src/popup/popup.ts"
+    sidepanel: "src/sidepanel/sidepanel.ts"
   },
   bundle: true,
   format: "esm",
@@ -65,7 +70,7 @@ await build({
   logLevel: "info"
 });
 
-for (const f of ["src/options/options.html", "src/popup/popup.html", "src/content/content.css"]) {
+for (const f of ["src/options/options.html", "src/sidepanel/sidepanel.html", "src/content/content.css"]) {
   cpSync(f, resolve(outdir, f.split("/").pop()));
 }
 cpSync("src/icons", resolve(outdir, "icons"), { recursive: true });

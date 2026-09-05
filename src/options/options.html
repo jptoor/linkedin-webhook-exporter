@@ -1,141 +1,181 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
 <meta charset="utf-8">
-<title>LinkedIn Webhook Exporter · Options</title>
+<title>Deepline for LinkedIn · Settings</title>
 <style>
-  body { font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #111; background: #f6f8fa; margin: 0; }
-  main { max-width: 720px; margin: 32px auto; background: #fff; border: 1px solid #d0d7de; border-radius: 12px; padding: 28px 32px; }
-  h1 { font-size: 20px; margin: 0 0 4px; }
-  .brandbar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; font-size: 12px; color: #6b6478; }
-  .brandbar img { display: block; }
-  footer { max-width: 720px; margin: 14px auto 40px; font-size: 12px; color: #6b6478; text-align: center; }
-  footer a { color: #1C112A; }
-  h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: #57606a; margin: 28px 0 10px; }
-  .muted { color: #57606a; font-size: 13px; }
-  label { display: block; font-weight: 600; margin: 14px 0 4px; }
-  input[type=text], input[type=url], input[type=password], input[type=number], select, textarea { width: 100%; padding: 8px 10px; border: 1px solid #d0d7de; border-radius: 6px; font: inherit; }
-  textarea { min-height: 70px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  :root { color-scheme: light; --ink: #1C112A; --ink-2: #3A2D4A; --muted: #6B6478; --line: #E8E3EE; --paper: #FBF9FC; --paper-2: #F3F0F7; --paper-3: #EBE6F1; --ok: #1F7A3D; --err: #A8261E; --warn: #8A5A00; --r: 8px; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; color: var(--ink); background: var(--paper); }
+  main { max-width: 680px; margin: 36px auto 60px; padding: 0 20px; }
+  header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 26px; }
+  header .brand { display: flex; align-items: center; gap: 10px; }
+  header .brand span { font-size: 12px; color: var(--muted); }
+  h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: -.01em; }
+  h2 { font-size: 13px; font-weight: 600; color: var(--muted); margin: 34px 0 10px; }
+  h3 { font-size: 14px; margin: 0; }
+  .muted { color: var(--muted); }
+  .small { font-size: 12.5px; }
+  label { display: block; font-weight: 600; margin: 14px 0 4px; font-size: 13px; }
+  input[type=text], input[type=url], input[type=password], input[type=number], select, textarea { width: 100%; padding: 9px 11px; border: 1px solid var(--line); border-radius: var(--r); font: inherit; background: #fff; }
+  textarea { min-height: 64px; }
+  input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
   .row { display: flex; gap: 12px; }
-  .row > * { flex: 1; }
-  .check { display: flex; align-items: center; gap: 8px; font-weight: 500; margin: 8px 0; }
+  .row > * { flex: 1; min-width: 0; }
+  .check { display: flex; align-items: center; gap: 8px; font-weight: 500; margin: 8px 0; font-size: 13.5px; }
   .check input { width: auto; }
-  button { appearance: none; border: 0; border-radius: 6px; padding: 9px 16px; background: #1C112A; color: #fff; font-weight: 600; font-size: 14px; cursor: pointer; }
-  button.secondary { background: #f1eff5; color: #1C112A; }
-  .actions { display: flex; gap: 10px; margin-top: 24px; align-items: center; }
-  #status { font-size: 13px; }
-  #status.ok { color: #1a7f37; } #status.err { color: #b42318; }
-  code { background: #f1f3f5; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
-  .warn { background: #fff8e6; border: 1px solid #f5d77a; border-radius: 8px; padding: 10px 12px; font-size: 13px; margin-top: 8px; }
+  button { appearance: none; border: 1px solid var(--line); border-radius: var(--r); padding: 9px 14px; background: #fff; color: var(--ink); font: inherit; font-weight: 600; font-size: 13.5px; cursor: pointer; }
+  button:hover { background: var(--paper-2); }
+  button.primary { background: var(--ink); color: #fff; border-color: var(--ink); }
+  button.primary:hover { background: var(--ink-2); }
+  button.link { border: 0; background: none; padding: 0; text-decoration: underline; text-underline-offset: 2px; font-weight: 500; }
+  button.danger { color: var(--err); }
+  button:disabled { opacity: .5; cursor: default; }
+  .actions { display: flex; gap: 10px; margin-top: 18px; align-items: center; flex-wrap: wrap; }
+  .status { font-size: 13px; }
+  .status.ok { color: var(--ok); } .status.err { color: var(--err); }
+  code { background: var(--paper-3); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+
+  /* Destination list */
+  .dests { list-style: none; padding: 0; margin: 0; border: 1px solid var(--line); border-radius: 12px; background: #fff; overflow: hidden; }
+  .dests li { display: flex; align-items: center; gap: 12px; padding: 12px 14px; }
+  .dests li + li { border-top: 1px solid var(--line); }
+  .dests .t { flex: 1; min-width: 0; }
+  .dests .n { font-weight: 600; }
+  .dests .k { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dests .kind { font-size: 10.5px; font-weight: 600; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 1px 7px; }
+  .dests .empty { color: var(--muted); }
+  .dests button { padding: 5px 10px; font-size: 12.5px; }
+
+  /* Editor */
+  .editor { border: 1px solid var(--line); border-radius: 12px; background: #fff; padding: 18px 20px; margin-top: 12px; }
+  .editor .kinds { display: flex; gap: 8px; margin-bottom: 6px; }
+  .editor .kinds button { flex: 1; padding: 12px; text-align: left; border-radius: 10px; }
+  .editor .kinds button[aria-pressed="true"] { border-color: var(--ink); background: var(--paper-2); box-shadow: inset 0 0 0 1px var(--ink); }
+  .editor .kinds b { display: block; }
+  .editor .kinds span { display: block; font-weight: 400; font-size: 12px; color: var(--muted); }
+  details { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 10px; }
+  summary { cursor: pointer; font-weight: 600; font-size: 13px; color: var(--muted); }
+  .warn { background: #FFF3D6; color: var(--warn); border-radius: var(--r); padding: 10px 12px; font-size: 13px; margin-top: 8px; }
+  .plays { max-height: 260px; overflow: auto; border: 1px solid var(--line); border-radius: var(--r); margin-top: 6px; background: #fff; }
+  .plays button { display: block; width: 100%; text-align: left; border: 0; border-radius: 0; padding: 9px 11px; font-weight: 500; }
+  .plays button + button { border-top: 1px solid var(--line); }
+  .plays button[aria-pressed="true"] { background: var(--paper-2); }
+  .plays .n { font-weight: 600; }
+  .plays .d { font-size: 12px; color: var(--muted); display: block; }
+  .plays .i { font-size: 11.5px; color: var(--muted); display: block; }
+  pre { max-height: 260px; overflow: auto; background: #fff; border: 1px solid var(--line); border-radius: var(--r); padding: 10px; font-size: 11px; }
+  footer { max-width: 680px; margin: 0 auto 40px; padding: 0 20px; font-size: 12px; color: var(--muted); }
+  footer a { color: var(--ink); }
+  [hidden] { display: none !important; }
 </style>
 </head>
 <body>
 <main>
-  <div class="brandbar"><img src="brand/deepline-wordmark.svg" alt="Deepline" height="16"><span>open source</span></div>
-  <h1>LinkedIn Webhook Exporter</h1>
-  <div class="muted">Everything here is stored only in this browser profile. Nothing is sent anywhere except to the webhook URL below.</div>
+  <header>
+    <span class="brand"><img src="brand/deepline-wordmark.svg" alt="Deepline" height="16"><span>for LinkedIn · open source</span></span>
+  </header>
+  <h1>Settings</h1>
+  <div class="muted">Everything here stays in this browser. People you push go only to the plays and webhooks you connect below.</div>
 
-  <h2>Destination</h2>
-  <label for="webhookUrl">Webhook URL</label>
-  <input id="webhookUrl" type="url" placeholder="https://example.com/webhooks/linkedin" autocomplete="off">
-  <div class="muted">Must be <code>https://</code>. <code>http://localhost</code> is allowed for development.</div>
+  <h2>Where your people go</h2>
+  <ul id="dests" class="dests"></ul>
+  <div class="actions"><button id="addDest" class="primary" type="button">Connect a play</button><button id="addWebhook" type="button">Connect a webhook</button></div>
 
-  <label for="signingSecret">Signing secret (HMAC-SHA256)</label>
-  <input id="signingSecret" type="password" autocomplete="off" placeholder="Leave blank to send unsigned (not recommended)">
-  <label for="signatureScheme">Signature scheme</label>
-  <select id="signatureScheme">
-    <option value="lwe">LWE: X-LWE-Signature sha256=hex over timestamp.body</option>
-    <option value="standard">Standard Webhooks: webhook-id / webhook-timestamp / webhook-signature (Deepline, Svix)</option>
-  </select>
-  <div class="muted">Standard Webhooks secrets are base64 and usually start with <code>whsec_</code>. Receivers verify with the same secret. Every request also carries <code>Idempotency-Key</code>.</div>
+  <div id="editor" class="editor" hidden>
+    <div class="kinds">
+      <button id="kindPlay" type="button" aria-pressed="true"><b>Deepline play</b><span>Runs a play in your Deepline org for each person or search.</span></button>
+      <button id="kindWebhook" type="button" aria-pressed="false"><b>Webhook</b><span>Posts JSON to any URL: Clay, Zapier, your own server.</span></button>
+    </div>
 
-  <div class="row">
-    <div>
-      <label for="authHeaderName">Extra auth header (optional)</label>
-      <input id="authHeaderName" type="text" placeholder="Authorization">
+    <div id="playFields">
+      <label for="apiKey">Deepline API key</label>
+      <input id="apiKey" type="password" autocomplete="off" placeholder="dl_…">
+      <div class="small muted">From your Deepline dashboard under API keys. Stored only in this browser.</div>
+      <details><summary>Advanced: self-hosted or local Deepline</summary>
+        <label for="baseUrl">Deepline address</label>
+        <input id="baseUrl" type="url" value="https://code.deepline.com">
+      </details>
+      <div class="actions"><button id="loadPlays" type="button">Load my plays</button><span id="playsStatus" class="status"></span></div>
+      <div id="plays" class="plays" hidden></div>
+      <div id="playPicked" class="small muted" style="margin-top:6px"></div>
     </div>
-    <div>
-      <label for="authHeaderValue">Header value</label>
-      <input id="authHeaderValue" type="password" autocomplete="off" placeholder="Bearer …">
-    </div>
-  </div>
 
-  <h2>Payload</h2>
-  <div class="row">
-    <div>
-      <label for="mappingPreset">Field mapping</label>
-      <select id="mappingPreset">
-        <option value="generic">Generic (nested JSON envelope)</option>
-        <option value="flat">Flat (one level, Clay / Zapier / sheets)</option>
-        <option value="deepline">Deepline (flat, Deepline field names)</option>
-      </select>
+    <div id="webhookFields" hidden>
+      <label for="url">Webhook URL</label>
+      <input id="url" type="url" placeholder="https://example.com/webhooks/linkedin" autocomplete="off">
+      <div class="small muted">Must start with <code>https://</code> (<code>http://localhost</code> is fine for development).</div>
+      <div class="row">
+        <div><label for="mappingPreset">Shape</label>
+          <select id="mappingPreset">
+            <option value="generic">Nested JSON</option>
+            <option value="flat">Flat (Clay, Zapier, sheets)</option>
+            <option value="deepline">Flat with Deepline field names</option>
+          </select></div>
+        <div><label for="sendMode">Batching</label>
+          <select id="sendMode">
+            <option value="single">One request per person</option>
+            <option value="batch">One request per push</option>
+          </select></div>
+      </div>
+      <details><summary>Advanced: signing and auth headers</summary>
+        <label for="signingSecret">Signing secret</label>
+        <input id="signingSecret" type="password" autocomplete="off" placeholder="Leave blank to send unsigned">
+        <label for="signatureScheme">Signature scheme</label>
+        <select id="signatureScheme">
+          <option value="lwe">X-LWE-Signature (sha256 hex over timestamp.body)</option>
+          <option value="standard">Standard Webhooks (webhook-id / -timestamp / -signature)</option>
+        </select>
+        <div class="row">
+          <div><label for="authHeaderName">Extra header</label><input id="authHeaderName" type="text" placeholder="Authorization"></div>
+          <div><label for="authHeaderValue">Value</label><input id="authHeaderValue" type="password" autocomplete="off" placeholder="Bearer …"></div>
+        </div>
+      </details>
     </div>
-    <div>
-      <label for="sendMode">Send mode</label>
-      <select id="sendMode">
-        <option value="single">Single: one request per lead (recommended)</option>
-        <option value="batch">Batch: one request per selection</option>
-      </select>
-    </div>
-  </div>
 
-  <label for="capturedBy">Captured by (label)</label>
-  <input id="capturedBy" type="text" placeholder="e.g. jai@company.com or SDR-East">
-
-  <label for="customFields">Custom fields (one <code>key=value</code> per line, sent as <code>custom</code>)</label>
-  <textarea id="customFields" placeholder="campaign=q3-outbound&#10;persona=vp-sales"></textarea>
-
-  <label class="check"><input id="includeExperience" type="checkbox"> Include experience history (profile pages)</label>
-  <label class="check"><input id="includeEducation" type="checkbox"> Include education (profile pages)</label>
-  <label class="check"><input id="includeAbout" type="checkbox"> Include About text (profile pages)</label>
-
-  <h2>Safety</h2>
-  <label class="check"><input id="dedupe" type="checkbox"> Skip profiles already sent</label>
-  <div class="row">
-    <div>
-      <label for="dedupeTtlDays">Remember sent profiles for (days)</label>
-      <input id="dedupeTtlDays" type="number" min="1" max="365">
-    </div>
-    <div>
-      <label for="dailyCap">Daily capture cap</label>
-      <input id="dailyCap" type="number" min="1" max="2000">
-    </div>
-  </div>
-  <h2>Bulk export</h2>
-  <div class="row">
-    <div>
-      <label for="exportDefaultLimit">Default max results per export</label>
-      <input id="exportDefaultLimit" type="number" min="1" max="2500">
-    </div>
-    <div>
-      <label for="exportPageDelayMinMs">Delay between pages, min (ms)</label>
-      <input id="exportPageDelayMinMs" type="number" min="0" max="120000">
-    </div>
-    <div>
-      <label for="exportPageDelayMaxMs">Delay between pages, max (ms)</label>
-      <input id="exportPageDelayMaxMs" type="number" min="0" max="120000">
+    <label for="destName">Name (what reps see)</label>
+    <input id="destName" type="text" placeholder="e.g. Warm intro">
+    <div class="actions">
+      <button id="saveDest" class="primary" type="button">Save</button>
+      <button id="testDest" type="button">Test connection</button>
+      <button id="cancelDest" class="link" type="button">Cancel</button>
+      <span id="destStatus" class="status"></span>
     </div>
   </div>
-  <div class="muted">LinkedIn shows at most 100 pages × 25 = 2,500 results per search. Split larger searches with filters. Exports also respect the daily cap below.</div>
 
-  <div class="warn">LinkedIn restricts accounts that capture too aggressively. Community guidance is 50 to 100 profiles per day per account. The default cap is 100. Bulk capture from Sales Navigator search pages is the most-restricted pattern.</div>
+  <h2>Your name on pushes</h2>
+  <input id="capturedBy" type="text" placeholder="e.g. jai@company.com" aria-label="Your name or email, attached to every push">
+  <div class="small muted">Attached to every push as “imported by”, so your team knows who found whom.</div>
 
-  <h2 id="log">Activity log</h2>
-  <div class="muted">Every capture, send, retry, export step, settings change and error is recorded locally (last 1,000 entries, no secrets). Nothing is uploaded.</div>
+  <h2>Limits</h2>
+  <div class="row">
+    <div><label for="dailyCap">Max people per day</label><input id="dailyCap" type="number" min="1" max="2000"></div>
+    <div><label for="searchDefaultLimit">Default search import size</label><input id="searchDefaultLimit" type="number" min="1" max="2500"></div>
+    <div><label for="dedupeTtlDays">Remember pushed people for (days)</label><input id="dedupeTtlDays" type="number" min="1" max="365"></div>
+  </div>
+  <label class="check"><input id="dedupe" type="checkbox"> Skip people already pushed</label>
+  <div class="warn">LinkedIn restricts accounts that pull too many profiles too fast. 50 to 100 people a day is the community rule of thumb; the default is 100. Whole-search imports run on Deepline’s side and do not count here.</div>
+
+  <details style="margin-top:22px"><summary>More options</summary>
+    <label class="check"><input id="includeExperience" type="checkbox"> Include work history (profile pages)</label>
+    <label class="check"><input id="includeEducation" type="checkbox"> Include education (profile pages)</label>
+    <label class="check"><input id="includeAbout" type="checkbox"> Include the About text (profile pages)</label>
+    <label for="customFields">Tags sent with every push (one <code>key=value</code> per line)</label>
+    <textarea id="customFields" placeholder="campaign=q3-outbound&#10;persona=vp-sales"></textarea>
+  </details>
+
+  <div class="actions"><button id="save" class="primary" type="button">Save settings</button><span id="status" class="status"></span></div>
+
+  <h2 id="log">History</h2>
+  <div class="small muted">Every push, retry and settings change is recorded here, in this browser only. No secrets are written.</div>
   <div class="actions" style="margin-top:10px">
-    <button id="downloadLog" class="secondary">Download log (JSON)</button>
-    <button id="clearLog" class="secondary">Clear log</button>
-    <span id="logStatus" class="muted"></span>
+    <button id="downloadLog" type="button">Download (JSON)</button>
+    <button id="clearLog" type="button">Clear</button>
+    <span id="logStatus" class="muted small"></span>
   </div>
-  <pre id="logPreview" style="max-height:260px; overflow:auto; background:#f6f8fa; border:1px solid #d0d7de; border-radius:8px; padding:10px; font-size:11px; margin-top:10px"></pre>
-
-  <div class="actions">
-    <button id="save">Save</button>
-    <button id="test" class="secondary">Send test event</button>
-    <span id="status"></span>
-  </div>
+  <pre id="logPreview"></pre>
 </main>
-<footer>Built and maintained by <a href="https://deepline.com/?utm_source=linkedin-webhook-exporter" target="_blank" rel="noopener">Deepline</a>. MIT licensed. Sends data only to the webhook you configure.</footer>
+<footer>Built and maintained by <a href="https://deepline.com/?utm_source=linkedin-webhook-exporter" target="_blank" rel="noopener">Deepline</a>. MIT licensed. Sends data only where you connect it.</footer>
 <script type="module" src="options.js"></script>
 </body>
 </html>

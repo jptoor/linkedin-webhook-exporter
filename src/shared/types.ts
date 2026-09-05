@@ -65,13 +65,15 @@ export interface SourceInfo {
 }
 
 /** Which import a lead came from: the person, the moment, and the search or
- *  list. One import id per click on a list page, or per bulk-export job. */
+ *  list. One import id per send (a send may span several pages of a search
+ *  when it comes from the basket). */
 export interface ImportInfo {
   import_id: string;
   imported_by: string | null;
   imported_at: string;
-  /** "manual" for a click on a list/profile, "export" for a bulk export job. */
-  import_kind: "manual" | "export";
+  /** "manual" for a click on a page, "basket" for a multi-page basket send,
+   *  "search" for a search handed to a backend provider. */
+  import_kind: "manual" | "basket" | "search";
   search_url: string | null;
   /** Human label: Sales Nav keywords + filters, list id, or the page title. */
   search_name: string | null;
@@ -105,10 +107,13 @@ export interface BatchPayload {
   custom: Record<string, string>;
 }
 
-/** A saved search: everything a backend provider (Deepline play, Edges, Apify)
- *  needs to re-run the same Sales Navigator / LinkedIn search server-side. */
+/** A search handed to a backend provider (Deepline play, WizLeads, Apify):
+ *  everything needed to re-run the same Sales Navigator / LinkedIn search
+ *  server-side. The extension never pages through results itself. */
 export interface SearchRecord {
-  /** Search URL without page/session/tracking params. */
+  /** Search URL without page/session/tracking params. For a Sales Navigator
+   *  saved search this is the shareable URL with the full query expression,
+   *  not the `savedSearchId` deep link (which only resolves for its owner). */
   search_url: string;
   page_type: PageType;
   surface: "sales_navigator" | "linkedin";
@@ -120,8 +125,12 @@ export interface SearchRecord {
   /** Filters parsed out of the Sales Navigator query expression, e.g. {"CURRENT_TITLE": ["CRO"]}. */
   filters: Record<string, string[]>;
   total_hint: number | null;
+  /** How many results the operator asked the backend to fetch. */
+  limit: number | null;
   page: number;
   list_id: string | null;
+  /** Sales Navigator saved-search id when the search was opened from one. */
+  saved_search_id: string | null;
   captured_at: string;
 }
 
@@ -132,6 +141,7 @@ export interface SearchPayload {
   sent_at: string;
   source: SourceInfo;
   search: SearchRecord;
+  import: ImportInfo | null;
   custom: Record<string, string>;
 }
 
@@ -145,8 +155,18 @@ export const MAPPING_PRESETS: readonly MappingPreset[] = ["generic", "flat", "de
  *  `${id}.${ts}.${body}`), which Deepline and Svix-style receivers verify natively. */
 export type SignatureScheme = "lwe" | "standard";
 
-export interface Settings {
-  webhookUrl: string;
+/* ------------------------------------------------------------ destinations */
+
+export type DestinationKind = "webhook" | "deepline_play";
+
+/** A plain HTTPS webhook (any receiver, Deepline inbound webhook, Clay, Zapier…). */
+export interface WebhookDestination {
+  id: string;
+  kind: "webhook";
+  name: string;
+  /** Pinned to the top of the picker. */
+  favorite: boolean;
+  url: string;
   /** HMAC-SHA256 secret. Empty string disables signing. */
   signingSecret: string;
   signatureScheme: SignatureScheme;
@@ -155,6 +175,53 @@ export interface Settings {
   authHeaderValue: string;
   mappingPreset: MappingPreset;
   sendMode: "single" | "batch";
+}
+
+/** How the extension turns leads into a play's `input`, inferred from the
+ *  play's input schema when it is selected (see shared/deepline.ts). */
+export type PlayInputMode =
+  /** Schema has `leads: array` -> one run per send with all rows. */
+  | "batch"
+  /** Schema has `lead: object` -> one run per lead with the flat row under `lead`. */
+  | "lead"
+  /** Field-name mapping (linkedin_url, first_name, company_name…) -> one run per lead. */
+  | "mapped";
+
+export interface PlayInputSpec {
+  mode: PlayInputMode;
+  /** Top-level input property names declared by the play (empty = unknown/any). */
+  fields: string[];
+  required: string[];
+  /** True when the play declares a search URL field (search_url / sales_navigator_url / url). */
+  acceptsSearch: boolean;
+  /** True when at least one lead field can be filled from a LinkedIn page. */
+  acceptsLeads: boolean;
+}
+
+/** A Deepline play run directly through the API (`POST /api/v2/plays/run`)
+ *  with the org's API key. No webhook token or signing secret is involved:
+ *  the API key is the credential. */
+export interface PlayDestination {
+  id: string;
+  kind: "deepline_play";
+  name: string;
+  /** Pinned to the top of the picker. */
+  favorite: boolean;
+  /** https://code.deepline.com by default; self-hosted / local dev allowed. */
+  baseUrl: string;
+  apiKey: string;
+  /** Play reference as accepted by the run API (`name`): e.g. "linkedin-capture" or "prebuilt/person-linkedin-to-email". */
+  playKey: string;
+  playName: string;
+  input: PlayInputSpec;
+}
+
+export type Destination = WebhookDestination | PlayDestination;
+
+export interface Settings {
+  destinations: Destination[];
+  /** Which destination the side panel sends to. */
+  activeDestinationId: string | null;
   dedupe: boolean;
   dedupeTtlDays: number;
   dailyCap: number;
@@ -163,24 +230,21 @@ export interface Settings {
   includeExperience: boolean;
   includeEducation: boolean;
   includeAbout: boolean;
-  /** Bulk export (paginated) settings. */
-  exportDefaultLimit: number;
-  exportPageDelayMinMs: number;
-  exportPageDelayMaxMs: number;
+  /** Default `limit` offered when sending a search to a backend. */
+  searchDefaultLimit: number;
 }
 
 /** The subset of settings a content script is allowed to see. Secrets never
  *  cross into a page-facing context. */
-export type ContentSettings = Pick<Settings, "includeExperience" | "includeEducation" | "includeAbout" | "exportDefaultLimit" | "dedupe" | "sendMode"> & { hasWebhook: boolean };
+export type ContentSettings = Pick<Settings, "includeExperience" | "includeEducation" | "includeAbout" | "dedupe" | "searchDefaultLimit"> & {
+  hasDestination: boolean;
+  destinationName: string | null;
+  destinationKind: DestinationKind | null;
+};
 
 export const DEFAULT_SETTINGS: Settings = {
-  webhookUrl: "",
-  signingSecret: "",
-  signatureScheme: "lwe",
-  authHeaderName: "",
-  authHeaderValue: "",
-  mappingPreset: "generic",
-  sendMode: "single",
+  destinations: [],
+  activeDestinationId: null,
   dedupe: true,
   dedupeTtlDays: 30,
   dailyCap: 100,
@@ -189,21 +253,35 @@ export const DEFAULT_SETTINGS: Settings = {
   includeExperience: true,
   includeEducation: true,
   includeAbout: true,
-  exportDefaultLimit: 500,
-  exportPageDelayMinMs: 4000,
-  exportPageDelayMaxMs: 9000
+  searchDefaultLimit: 100
 };
 
 export const LIMITS = {
   dailyCapMax: 2000,
   dedupeTtlDaysMax: 365,
-  exportLimitMax: 2500,
-  pageDelayMaxMs: 120_000,
-  pageDelayMinFloorMs: 1000,
+  searchLimitMax: 2500,
   customFieldsMax: 20,
   customValueMax: 500,
-  capturedByMax: 200
+  capturedByMax: 200,
+  destinationsMax: 25,
+  basketMax: 500
 } as const;
+
+/* ------------------------------------------------------------ basket */
+
+/** A lead the operator picked on some page and has not sent yet. Lives in
+ *  session storage (cleared when the browser closes) so a selection can span
+ *  many result pages before one send. */
+export interface BasketItem {
+  key: string;
+  lead: LeadRecord;
+  pageType: PageType;
+  pageUrl: string;
+  pageTitle: string | null;
+  addedAt: number;
+}
+
+/* ------------------------------------------------------------ queue */
 
 export type QueueStatus = "pending" | "sending" | "sent" | "failed";
 
@@ -224,6 +302,14 @@ export interface QueueItem {
   lastStatus: number | null;
   /** When the item was claimed for sending; a stale lease is recovered. */
   sendingAt: number | null;
+  /** Which destination the item is bound to. An item outlives destination
+   *  edits: if its destination is deleted the item fails permanently. */
+  destinationId: string;
+  destinationKind: DestinationKind;
+  /** Human label for the activity feed: a name, "12 leads", or a search name. */
+  label: string;
+  /** Deepline workflow/run id returned by the run API, once accepted. */
+  runId: string | null;
 }
 
 export interface SendResult {
@@ -231,4 +317,6 @@ export interface SendResult {
   status: number | null;
   retryable: boolean;
   error: string | null;
+  /** Run id when the receiver is the Deepline run API. */
+  runId?: string | null;
 }

@@ -11,7 +11,7 @@ const lead2: LeadRecord = { ...lead, full_name: "Evan Park", first_name: "Evan",
 const source: SourceInfo = { extension: "linkedin-webhook-exporter", version: "0.1.0", page_type: "profile", page_url: "https://www.linkedin.com/in/jane/", captured_by: "jai" };
 let n = 0;
 const opts = (preset: "generic" | "flat" | "deepline", mode: "single" | "batch") => ({ preset, mode, source, custom: { campaign: "q3" }, eventId: () => `evt-${++n}-xxxxxxxx`, sentAt: "2026-09-03T00:00:01.000Z" });
-const imp = { import_id: "imp-1-xxxxxxxx", imported_by: "jai", imported_at: "t", import_kind: "export" as const, search_url: "https://www.linkedin.com/sales/search/people?query=x", search_name: "cro · region: US", list_id: null, page: 3 };
+const imp = { import_id: "imp-1-xxxxxxxx", imported_by: "jai", imported_at: "t", import_kind: "basket" as const, search_url: "https://www.linkedin.com/sales/search/people?query=x", search_name: "cro · region: US", list_id: null, page: 3 };
 
 describe("every preset carries the versioned envelope", () => {
   it("single and batch, all presets", () => {
@@ -66,7 +66,7 @@ describe("import info", () => {
     const [g] = buildBodies([lead], { ...opts("generic", "single"), import: imp });
     expect((g.body as { import: unknown }).import).toEqual(imp);
     const [f] = buildBodies([lead], { ...opts("flat", "single"), import: imp });
-    expect(f.body).toMatchObject({ import_id: imp.import_id, imported_by: "jai", import_kind: "export", import_search_name: "cro · region: US", import_page: 3 });
+    expect(f.body).toMatchObject({ import_id: imp.import_id, imported_by: "jai", import_kind: "basket", import_search_name: "cro · region: US", import_page: 3 });
   });
 });
 

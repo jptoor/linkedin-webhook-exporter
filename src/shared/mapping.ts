@@ -104,9 +104,9 @@ export function buildBodies(leads: LeadRecord[], opts: BuildOptions): Array<{ ev
 /** Body for a saved search. Generic keeps the envelope; flat and Deepline
  *  presets send one flat object with `event: "search.captured"` so a play or a
  *  Clay/Zapier receiver can branch on it and hand the URL to a provider. */
-export function buildSearchBody(search: SearchRecord, preset: MappingPreset, source: SourceInfo, custom: Record<string, string>, eventId: string, sentAt: string): unknown {
+export function buildSearchBody(search: SearchRecord, preset: MappingPreset, source: SourceInfo, custom: Record<string, string>, eventId: string, sentAt: string, imp: ImportInfo | null = null): unknown {
   if (preset === "generic") {
-    const body: SearchPayload = { ...envelope("search.captured", eventId, sentAt), event: "search.captured", source, search, custom };
+    const body: SearchPayload = { ...envelope("search.captured", eventId, sentAt), event: "search.captured", source, search, import: imp, custom };
     return body;
   }
   const { params, filters, ...rest } = search;
@@ -116,6 +116,7 @@ export function buildSearchBody(search: SearchRecord, preset: MappingPreset, sou
     params_json: JSON.stringify(params),
     filters_json: JSON.stringify(filters),
     ...flattenSource(source),
+    ...flattenImport(imp),
     ...prefixCustom(custom)
   };
 }

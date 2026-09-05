@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { sendBody } from "../../src/background/sender";
+import { playRunBody, sendBody } from "../../src/background/sender";
 import { verifySignature } from "../../src/shared/signing";
-import { DEFAULT_SETTINGS } from "../../src/shared/types";
+import type { PlayDestination, WebhookDestination } from "../../src/shared/types";
 
-const settings = { ...DEFAULT_SETTINGS, webhookUrl: "https://example.com/hook", signingSecret: "topsecret", authHeaderName: "Authorization", authHeaderValue: "Bearer abc" };
+const dest: WebhookDestination = { id: "w1", kind: "webhook", name: "hook", favorite: false, url: "https://example.com/hook", signingSecret: "topsecret", signatureScheme: "lwe", authHeaderName: "Authorization", authHeaderValue: "Bearer abc", mappingPreset: "generic", sendMode: "single" };
+const play: PlayDestination = { id: "p1", kind: "deepline_play", name: "Warm intro", favorite: true, baseUrl: "https://code.deepline.com", apiKey: "dl_key", playKey: "warm-intro", playName: "Warm intro", input: { mode: "mapped", fields: ["linkedin_url"], required: ["linkedin_url"], acceptsSearch: false, acceptsLeads: true } };
 
-describe("sendBody", () => {
+describe("sendBody (webhook)", () => {
   it("POSTs JSON with signature, timestamp, event id and auth header", async () => {
     let captured: { url: string; init: RequestInit } | null = null;
     const fetchImpl = (async (url: string, init: RequestInit) => {
@@ -13,10 +14,10 @@ describe("sendBody", () => {
       return new Response("ok", { status: 200 });
     }) as unknown as typeof fetch;
     const body = JSON.stringify({ hello: "world" });
-    const r = await sendBody(settings, body, "evt-1", { version: "0.1.0", fetchImpl, now: () => 1_700_000_000_000 });
-    expect(r).toEqual({ ok: true, status: 200, retryable: false, error: null });
+    const r = await sendBody(dest, body, "evt-1", { version: "0.1.0", fetchImpl, now: () => 1_700_000_000_000 });
+    expect(r).toMatchObject({ ok: true, status: 200, retryable: false, error: null });
     const h = captured!.init.headers as Record<string, string>;
-    expect(captured!.url).toBe(settings.webhookUrl);
+    expect(captured!.url).toBe(dest.url);
     expect(captured!.init.method).toBe("POST");
     expect(captured!.init.body).toBe(body);
     expect(captured!.init.credentials).toBe("omit");
@@ -37,7 +38,7 @@ describe("sendBody", () => {
       return new Response("", { status: 202 });
     }) as unknown as typeof fetch;
     const secret = "whsec_" + Buffer.from("raw-key-bytes").toString("base64");
-    await sendBody({ ...settings, signatureScheme: "standard", signingSecret: secret, mappingPreset: "deepline" }, "{}", "evt-9-xxxxxxxx", { version: "x", fetchImpl, now: () => 1_700_000_000_000, dedupeKey: "https://www.linkedin.com/in/jane" });
+    await sendBody({ ...dest, signatureScheme: "standard", signingSecret: secret, mappingPreset: "deepline" }, "{}", "evt-9-xxxxxxxx", { version: "x", fetchImpl, now: () => 1_700_000_000_000, dedupeKey: "https://www.linkedin.com/in/jane" });
     expect(h["webhook-id"]).toBe("evt-9-xxxxxxxx");
     expect(h["webhook-timestamp"]).toBe("1700000000");
     const { createHmac } = await import("node:crypto");
@@ -52,22 +53,51 @@ describe("sendBody", () => {
       h = init.headers as Record<string, string>;
       return new Response("", { status: 204 });
     }) as unknown as typeof fetch;
-    await sendBody({ ...settings, signingSecret: "", authHeaderName: "", authHeaderValue: "" }, "{}", "e", { version: "x", fetchImpl });
+    await sendBody({ ...dest, signingSecret: "", authHeaderName: "", authHeaderValue: "" }, "{}", "e", { version: "x", fetchImpl });
     expect(h["X-LWE-Signature"]).toBeUndefined();
     expect(h["Authorization"]).toBeUndefined();
   });
   it("classifies HTTP failures and includes response text", async () => {
     const fetchImpl = (async () => new Response("bad signature", { status: 401 })) as unknown as typeof fetch;
-    const r = await sendBody(settings, "{}", "e", { version: "x", fetchImpl });
-    expect(r).toEqual({ ok: false, status: 401, retryable: false, error: "HTTP 401: bad signature" });
-    const r5 = await sendBody(settings, "{}", "e", { version: "x", fetchImpl: (async () => new Response("", { status: 502 })) as unknown as typeof fetch });
+    const r = await sendBody(dest, "{}", "e", { version: "x", fetchImpl });
+    expect(r).toMatchObject({ ok: false, status: 401, retryable: false, error: "HTTP 401: bad signature" });
+    const r5 = await sendBody(dest, "{}", "e", { version: "x", fetchImpl: (async () => new Response("", { status: 502 })) as unknown as typeof fetch });
     expect(r5.retryable).toBe(true);
   });
   it("treats network errors and timeouts as retryable", async () => {
-    const r = await sendBody(settings, "{}", "e", { version: "x", fetchImpl: (async () => { throw new TypeError("Failed to fetch"); }) as unknown as typeof fetch });
-    expect(r).toEqual({ ok: false, status: null, retryable: true, error: "Failed to fetch" });
+    const r = await sendBody(dest, "{}", "e", { version: "x", fetchImpl: (async () => { throw new TypeError("Failed to fetch"); }) as unknown as typeof fetch });
+    expect(r).toMatchObject({ ok: false, status: null, retryable: true, error: "Failed to fetch" });
     const slow = ((_: string, init: RequestInit) => new Promise((_res, rej) => init.signal!.addEventListener("abort", () => rej(Object.assign(new Error("aborted"), { name: "AbortError" }))))) as unknown as typeof fetch;
-    const t = await sendBody(settings, "{}", "e", { version: "x", fetchImpl: slow, timeoutMs: 10 });
-    expect(t).toEqual({ ok: false, status: null, retryable: true, error: "timeout" });
+    const t = await sendBody(dest, "{}", "e", { version: "x", fetchImpl: slow, timeoutMs: 10 });
+    expect(t).toMatchObject({ ok: false, status: null, retryable: true, error: "timeout" });
+  });
+});
+
+describe("sendBody (Deepline play)", () => {
+  it("POSTs the run request to /api/v2/plays/run with the API key and returns the run id", async () => {
+    let captured: { url: string; init: RequestInit } | null = null;
+    const fetchImpl = (async (url: string, init: RequestInit) => {
+      captured = { url, init };
+      return new Response(JSON.stringify({ workflowId: "wf_123" }), { status: 202 });
+    }) as unknown as typeof fetch;
+    const body = playRunBody(play, { linkedin_url: "https://www.linkedin.com/in/jane" });
+    expect(JSON.parse(body)).toEqual({ name: "warm-intro", input: { linkedin_url: "https://www.linkedin.com/in/jane" } });
+    const r = await sendBody(play, body, "evt-2", { version: "0.2.0", fetchImpl, dedupeKey: "https://www.linkedin.com/in/jane" });
+    expect(r).toMatchObject({ ok: true, status: 202, runId: "wf_123" });
+    expect(captured!.url).toBe("https://code.deepline.com/api/v2/plays/run");
+    const h = captured!.init.headers as Record<string, string>;
+    expect(h.Authorization).toBe("Bearer dl_key");
+    expect(h["Idempotency-Key"]).toBe("https://www.linkedin.com/in/jane");
+    expect(h["x-deepline-dedupe-key"]).toBe("https://www.linkedin.com/in/jane");
+    expect(h["X-LWE-Signature"]).toBeUndefined();
+    expect(captured!.init.credentials).toBe("omit");
+  });
+  it("a rejected API key is not retried", async () => {
+    const r = await sendBody(play, "{}", "e", { version: "x", fetchImpl: (async () => new Response('{"error":"unauthorized"}', { status: 401 })) as unknown as typeof fetch });
+    expect(r).toMatchObject({ ok: false, status: 401, retryable: false });
+  });
+  it("only https or localhost base URLs are used", () => {
+    expect(() => playRunBody({ ...play, baseUrl: "http://evil.example" }, {})).not.toThrow();
+    expect(() => sendBody({ ...play, baseUrl: "http://evil.example" }, "{}", "e", { version: "x" })).rejects.toThrow(/https/);
   });
 });

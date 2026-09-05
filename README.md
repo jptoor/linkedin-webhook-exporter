@@ -1,38 +1,45 @@
 <p><img src="src/brand/deepline-wordmark.svg" alt="Deepline" height="22"></p>
 
-# LinkedIn Webhook Exporter
+# Deepline for LinkedIn
 
-Open-source Chrome extension that captures the person data LinkedIn already
-shows you (profile pages, people search, Sales Navigator search, lists, and
-lead pages) and POSTs it as signed JSON to one webhook you control: a
-[Deepline](https://deepline.com) play, a Clay table, Zapier / Make / n8n, or
-the bundled SQLite receiver.
+Open-source Chrome extension (MIT) that lets a sales rep push the people they
+are looking at on LinkedIn or Sales Navigator into a
+[Deepline](https://deepline.com) play, or to any webhook (Clay, Zapier, your
+own server), from a side panel. Pick a few people across several result
+pages, push them with one button, or hand a whole Sales Navigator search to
+Deepline and let the backend fetch the members.
 
-It does the capture and route layers that commercial LinkedIn extensions
-sell, and leaves email/phone reveal to your receiver. No account, no server,
-no telemetry. Settings live in your browser profile only.
+No account of its own, no server of its own, no telemetry. Settings live in
+your browser profile only.
 
 > **Read before using.** LinkedIn's [User Agreement](https://www.linkedin.com/legal/user-agreement)
 > prohibits browser extensions that scrape or automate its service, and
 > LinkedIn [restricts accounts](https://www.linkedin.com/help/linkedin/answer/a1341387)
 > that use them. This tool reads only what your browser already renders and
-> acts only when you click, but **no daily cap, delay, or dedupe setting makes
-> that compliant or prevents a restriction.** Use it where you have the right
-> to, at your own risk, with your own LinkedIn account. See [PRIVACY.md](PRIVACY.md).
+> acts only when you click, and it never pages through results on its own,
+> but **no daily cap or dedupe setting makes that compliant or prevents a
+> restriction.** Use it where you have the right to, at your own risk, with
+> your own LinkedIn account. See [PRIVACY.md](PRIVACY.md).
 
-- **One click** on a profile, **multi-select** on list pages.
-- **Export a whole search**: paste a Sales Navigator search or list URL (or click "Export all" on the page) and every page is walked up to your limit, LinkedIn's 2,500 cap, or your daily cap, with pause/stop. Same flow as Wiza, Prospeo, lemlist and Exportly, minus their cloud.
-- **Stable payload** with normalized names and canonical URLs; three presets
-  (generic envelope, flat, Deepline field names).
-- **Signed** with HMAC-SHA256 in either the LWE scheme or
-  [Standard Webhooks](https://www.standardwebhooks.com) (Deepline / Svix native).
-- **Idempotent**: `Idempotency-Key` and `x-deepline-dedupe-key` are the lead's
-  identity, retries re-send byte-identical bodies, receivers can dedupe safely.
-- **Guardrails**: local dedupe, daily cap (default 100, hard max 2,000), paced bulk export. These are conveniences, not compliance.
-- **Activity log**: every capture, send, retry, export step, settings change and error is recorded locally (last 1,000 entries, secrets redacted) and can be downloaded as JSON.
-- **Saved searches + import audit**: "Save search" sends the Sales Navigator query (decoded filters, keywords, result count) as `search.captured`; every lead carries who imported it, when, and from which search or list, ready for a `sales_nav_imports` table.
+## What a rep sees
 
-Docs: [`docs/SPEC.md`](docs/SPEC.md) · [`docs/ACCEPTANCE_TESTS.md`](docs/ACCEPTANCE_TESTS.md) · [`docs/RESEARCH.md`](docs/RESEARCH.md) · [`examples/deepline`](examples/deepline)
+- **Side panel** (toolbar icon or the dock in the corner of the page): what
+  you are looking at, where it goes, and one pinned button that says exactly
+  what will happen: "Push 4 people to Warm intro".
+- **Pick people across pages**: a round "+" on every result row (Sales
+  Navigator's own checkboxes work too). Picks stay while you move between
+  pages; push them all at once. Cleared when the browser closes.
+- **Import a whole search**: on a Sales Navigator search, set "up to N
+  people" and click Import search. The search URL and filters go to the play
+  you chose; Deepline fetches the members in the background. For a saved
+  search, press Sales Navigator's own "Share search" once so the shareable
+  link (with the full query) is sent instead of the private deep link.
+- **Plays, not URLs**: paste a Deepline API key once, load your plays, pick
+  one. Switch between plays from the "Sending to" chip; pin favourites.
+  Webhooks with signing secrets and extra headers stay available under
+  "Connect a webhook" for everyone else.
+- **Recent**: every push with a plain status (Sent, Running, Retrying,
+  Failed) and a retry link. Full history with secrets redacted in Settings.
 
 ## Install (developer)
 
@@ -42,22 +49,38 @@ npm run build          # -> dist/
 ```
 
 Chrome → `chrome://extensions` → Developer mode → Load unpacked → `dist/`.
+Click the toolbar icon to open the side panel.
 
-## Configure
+## Connect Deepline
 
-Open the extension options:
+1. Deepline dashboard → API keys → copy a key.
+2. Extension Settings → **Connect a play** → paste the key → **Load my plays**
+   → pick a play → **Save**.
+3. Open any LinkedIn profile or Sales Navigator search. The pinned button now
+   reads "Push … to <play>".
+
+The extension reads the play's input schema and shapes the run input to it:
+`leads[]` gets one run per push, `lead{}` or field names such as
+`linkedin_url` / `first_name` / `company_name` get one run per person, and a
+`search_url` field makes the play eligible for "Import search". Two reference
+plays live in [`examples/deepline`](examples/deepline): one that stores and
+enriches a person, one that fetches a forwarded search through WizLeads.
+
+## Connect a webhook instead
+
+Settings → **Connect a webhook**:
 
 | Setting | What it does |
 |---|---|
 | Webhook URL | `https://` only (`http://localhost` allowed for dev). The host is requested as an optional permission on save. |
-| Signing secret + scheme | `LWE` (`X-LWE-Signature: sha256=hex`) or `Standard Webhooks` (`webhook-id/-timestamp/-signature`, `whsec_` secrets). |
-| Extra header | e.g. `x-deepline-webhook-secret` or `Authorization: Bearer …`. |
-| Field mapping | `generic` (nested envelope), `flat` (Clay/Zapier/sheets), `deepline`. |
-| Send mode | `single` (one request per lead, recommended) or `batch`. |
-| Dedupe / TTL / daily cap | Safety controls. |
-| Captured by / custom fields | Provenance and tags carried on every payload. |
+| Shape | nested JSON envelope, flat (Clay / Zapier / sheets), or flat with Deepline field names. |
+| Batching | one request per person (recommended) or one request per push. |
+| Advanced: signing | `LWE` (`X-LWE-Signature: sha256=hex` over `timestamp.body`) or [Standard Webhooks](https://www.standardwebhooks.com) (`webhook-id/-timestamp/-signature`, `whsec_` secrets). |
+| Advanced: extra header | e.g. `Authorization: Bearer …`. |
 
-Click **Send test event** to verify the endpoint.
+Every request carries `X-LWE-Event-Id`, `Idempotency-Key` (the person's
+canonical URL for unforced single sends) and, for the Deepline shape,
+`x-deepline-dedupe-key`. Retries re-send byte-identical bodies.
 
 ## Try it locally in 60 seconds
 
@@ -66,58 +89,48 @@ LWE_SECRET=topsecret LWE_ADMIN_TOKEN=admin npm run receiver   # 127.0.0.1:8787, 
 npm run build:test && npm run samples                          # sample LinkedIn-shaped pages on 127.0.0.1:8790
 ```
 
-Load `dist-test/` as an unpacked extension, set the webhook URL to
-`http://127.0.0.1:8787/hook`, secret `topsecret`, scheme LWE. Open a sample
-page (or any LinkedIn profile with the production build), click **Send to
-webhook**, then:
+Load `dist-test/` as an unpacked extension, connect a webhook to
+`http://127.0.0.1:8787/hook` with secret `topsecret` (scheme LWE), open a
+sample page, click **Push**, then:
 
 ```sh
 curl -H 'Authorization: Bearer admin' localhost:8787/leads
 ```
 
 The receiver binds to loopback, refuses to start without a secret unless
-`NODE_ENV=development LWE_ALLOW_UNSIGNED=1`, and only serves `/leads`, `/searches`, `/imports` when
-`LWE_ADMIN_TOKEN` is set. It is a reference, not a production service.
+`NODE_ENV=development LWE_ALLOW_UNSIGNED=1`, and only serves `/leads`,
+`/searches`, `/imports` when `LWE_ADMIN_TOKEN` is set. It is a reference, not
+a production service.
 
-## Export a whole Sales Navigator search
-
-On any Sales Navigator search, lead list, or LinkedIn people search, the panel
-shows "Export all pages, up to N". Or open the popup, paste the URL, set a
-limit, and click "Export all pages". The extension walks `?page=1..100` in the
-same tab with a randomized 4 to 9 s delay between pages, auto-scrolls each page
-so lazy rows render, and sends every lead through the normal pipeline (dedupe,
-daily cap, signed webhook). Progress, pause, and stop live in the panel and the
-popup. LinkedIn shows at most 2,500 results per search; split bigger searches
-with filters, as every competitor recommends.
-
-## Payload (generic preset, single mode)
+## Payload (webhook, nested shape, one person)
 
 ```json
 {
   "schema_version": "1",
   "event": "lead.captured",
   "event_id": "5f0c…",
-  "sent_at": "2026-09-03T15:04:05.000Z",
-  "source": { "extension": "linkedin-webhook-exporter", "version": "0.1.0", "page_type": "profile", "page_url": "https://www.linkedin.com/in/jane-doe-123/", "captured_by": "jai" },
+  "sent_at": "2026-09-05T15:04:05.000Z",
+  "source": { "extension": "linkedin-webhook-exporter", "version": "0.2.0", "page_type": "salesnav_search", "page_url": "https://www.linkedin.com/sales/search/people?query=…&page=2", "captured_by": "jai" },
+  "import": { "import_id": "9b1d…", "imported_by": "jai", "imported_at": "…", "import_kind": "basket", "search_url": "https://www.linkedin.com/sales/search/people?query=…", "search_name": "current title: CRO · region: United States", "list_id": null, "page": 2 },
   "custom": { "campaign": "q3" },
   "lead": {
     "full_name": "Jane Doe", "first_name": "Jane", "last_name": "Doe",
-    "headline": "VP of Sales at Acme Corp", "title": "VP of Sales",
-    "company_name": "Acme Corp", "company_linkedin_url": "https://www.linkedin.com/company/12345",
+    "headline": null, "title": "VP of Sales", "company_name": "Acme Corp",
+    "company_linkedin_url": "https://www.linkedin.com/sales/company/12345",
     "location": "Austin, Texas, United States",
-    "linkedin_url": "https://www.linkedin.com/in/jane-doe-123", "linkedin_slug": "jane-doe-123",
-    "linkedin_member_urn": null, "sales_navigator_url": null,
-    "connection_degree": "2nd", "profile_image_url": "https://…", "about": "…",
-    "experience": [{ "title": "VP of Sales", "company_name": "Acme Corp", "company_linkedin_url": "https://www.linkedin.com/company/12345", "date_range": "Jan 2023 - Present · 3 yrs 8 mos", "location": null }],
-    "education": [{ "school": "University of Texas at Austin", "degree": "MBA, Marketing", "date_range": "2014 - 2016" }],
-    "captured_at": "2026-09-03T15:04:04.000Z"
+    "linkedin_url": null, "linkedin_slug": null,
+    "linkedin_member_urn": "ACwAAA…", "sales_navigator_url": "https://www.linkedin.com/sales/lead/ACwAAA…",
+    "connection_degree": "2nd", "profile_image_url": "https://…", "about": null,
+    "experience": [], "education": [], "captured_at": "…", "parse_warnings": []
   }
 }
 ```
 
-Headers: `X-LWE-Event-Id`, `X-LWE-Version`, `Idempotency-Key`, plus the
-signature headers for the chosen scheme. See the spec for the flat and
-Deepline shapes.
+`import_kind` is `manual` (one click on a page), `basket` (a push of picked
+people, possibly from several pages, sharing one `import_id`) or `search` (a
+forwarded search, event `search.captured` with `search.search_url`,
+`search.filters`, `search.limit`, `search.saved_search_id`). See the spec
+for the flat and Deepline shapes and the play run inputs.
 
 ## Verify a request (Node)
 
@@ -128,46 +141,38 @@ const expected = "sha256=" + createHmac("sha256", SECRET).update(`${ts}.${rawBod
 const ok = Math.abs(Date.now() / 1000 - ts) < 300 && timingSafeEqual(Buffer.from(expected), Buffer.from(req.headers["x-lwe-signature"]));
 ```
 
-## Deepline
-
-See [`examples/deepline`](examples/deepline). Short version: publish the
-example play, paste its `endpointUrl` as the webhook, choose the Deepline
-preset + Standard Webhooks with the play's `whsec_` secret. Bodies arrive as
-the play's `input` verbatim; `x-deepline-dedupe-key` makes re-captures a
-no-op.
-
 ## Tests
 
 ```sh
-npm test                 # unit (vitest): parsers, mapping, signing, queue, sender, receiver e2e
-npm run test:acceptance  # Playwright: real extension in Chromium against fixture pages + mock webhook
+npm test                 # unit (vitest): parsers, mapping, play input shaping, basket, signing, queue, worker, receiver
+npm run test:acceptance  # Playwright: real extension in Chromium against fixture pages, a mock webhook and a mock Deepline API
+npm run e2e              # drives every sample page with the real extension and writes docs/E2E-REPORT.md
 ```
 
 ## Safety and compliance
 
 The extension only reads what LinkedIn renders to you and only acts on a
-click (bulk export runs one page at a time after an explicit start, with a
-visible pause/stop). LinkedIn's terms prohibit scraping and automation by
-extensions regardless of pace; keep the daily cap low, prefer profile-page
-capture over bulk Sales Navigator capture, and make sure you have a lawful
-basis for processing the people you capture. Nothing here is a safe harbor.
-You are responsible for how you use this tool.
+click. It never scrolls, paginates or navigates on its own: a whole-search
+import is a single request that hands the search to your backend. LinkedIn's
+terms prohibit scraping and automation by extensions regardless of pace;
+keep the daily cap low and make sure you have a lawful basis for processing
+the people you push. Nothing here is a safe harbor. You are responsible for
+how you use this tool.
 
-Detection surface, for the record: no `cookies` permission, no injected
-`<script src="chrome-extension://…">`, no request interception, no
-unsolicited fetches to LinkedIn, panel UI in a shadow root, and every click is
-a real user click.
+Detection surface, for the record: no `cookies` permission, no request
+interception, no unsolicited fetches to LinkedIn, on-page UI in a shadow root,
+every push is a real user click. The one page-context script only observes
+the link Sales Navigator's own "Share search" button copies.
 
 ## Sample pages, tests, audit
 
 - `npm run samples` serves static pages for every supported surface (classic
   and 2026 layouts, messy names, delayed rows, grouped experience) at
   LinkedIn-shaped paths for manual testing with the test build.
-- `npm test` (unit) and `npm run test:acceptance` (real extension in
-  Chromium) cover the parsers, delivery, export lifecycle, receiver, and the
-  edge cases in `samples/`.
 - `docs/AUDIT.md` is an independent audit; `docs/AUDIT-STATUS.md` tracks the
   fix for each finding.
+
+Docs: [`docs/SPEC.md`](docs/SPEC.md) · [`docs/ACCEPTANCE_TESTS.md`](docs/ACCEPTANCE_TESTS.md) · [`docs/RESEARCH.md`](docs/RESEARCH.md) · [`examples/deepline`](examples/deepline)
 
 ## License
 

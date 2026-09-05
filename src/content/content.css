@@ -1,6 +1,19 @@
-/* Light-DOM pieces only: row checkboxes inside LinkedIn rows and toasts.
-   The panel itself is rendered inside a shadow root (see ui.ts). */
-.lwe-check { position: absolute; left: 4px; top: 4px; z-index: 5; width: 18px; height: 18px; cursor: pointer; accent-color: #1C112A; }
+/* Light-DOM pieces only: the per-row select toggle inside LinkedIn rows and
+   toasts. The dock is rendered inside a shadow root (see ui.ts). */
 .lwe-row-host { position: relative !important; }
-.lwe-row-host.lwe-sent { outline: 2px solid #1a7f37; outline-offset: -2px; }
-.lwe-toast { position: fixed; left: 50%; bottom: 90px; transform: translateX(-50%); background: #111; color: #fff; padding: 8px 14px; border-radius: 8px; font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; z-index: 2147483001; }
+.lwe-pick {
+  position: absolute; right: 10px; top: 10px; z-index: 6;
+  width: 26px; height: 26px; border-radius: 50%; border: 1.5px solid #1C112A;
+  background: #FBF9FC; color: #1C112A; font: 600 15px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  display: inline-flex; align-items: center; justify-content: center; padding: 0;
+  cursor: pointer; box-shadow: 0 1px 3px rgba(28,17,42,.18);
+  transition: transform .15s cubic-bezier(.22,1,.36,1), background .15s;
+}
+.lwe-pick:hover { background: #EBE6F1; transform: scale(1.08); }
+.lwe-pick:focus-visible { outline: 2px solid #0a66c2; outline-offset: 2px; }
+.lwe-pick[aria-pressed="true"] { background: #1C112A; color: #fff; }
+.lwe-row-host.lwe-in-basket { box-shadow: inset 3px 0 0 #1C112A; }
+.lwe-row-host.lwe-sent .lwe-pick { border-color: #1F7A3D; color: #1F7A3D; }
+.lwe-row-host.lwe-sent .lwe-pick[aria-pressed="true"] { background: #1F7A3D; color: #fff; }
+.lwe-toast { position: fixed; left: 50%; bottom: 90px; transform: translateX(-50%); background: #1C112A; color: #fff; padding: 8px 14px; border-radius: 10px; font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; z-index: 2147483001; box-shadow: 0 8px 24px rgba(28,17,42,.25); }
+@media (prefers-reduced-motion: reduce) { .lwe-pick { transition: none; } }

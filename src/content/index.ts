@@ -1,36 +1,38 @@
-import { parseTotalHint, type ExportJob } from "../shared/export-job";
-import type { BackgroundToContent, CaptureResponse, CollectResponse, ContentSettingsResponse, ExportStatusResponse } from "../shared/messages";
+import type { BackgroundToContent, BasketResponse, CaptureResponse, ContentSettingsResponse, PageContext } from "../shared/messages";
 import { dedupeKey } from "../shared/normalize";
-import { isSensitiveParam } from "../shared/search";
+import { isSensitiveParam, savedSearchIdFrom, searchName } from "../shared/search";
 import type { LeadRecord, PageType } from "../shared/types";
 import { detectPageType, isListPage, listRows, parsePage, parsePeopleSearchRow, parseSalesNavRow } from "./parsers";
-import { mountExportControls, mountPanel, toast, type PanelHandles } from "./ui";
+import { makePick, mountPanel, setPicked, toast } from "./ui";
 
 const send = <T,>(msg: unknown): Promise<T> => chrome.runtime.sendMessage(msg) as Promise<T>;
 const NEW_ID = () => crypto.randomUUID();
 
 function describeRejection(r: CaptureResponse): string {
   switch (r.rejectedReason) {
-    case "no_webhook":
-      return "No webhook configured. Open the extension options.";
+    case "no_destination":
+      return "Choose where to send first (open the panel).";
     case "invalid_url":
-      return "Webhook URL must be https://. Fix it in options.";
+      return "That play or webhook is not set up completely. Open Settings.";
     case "daily_cap":
-      return `Daily cap reached (${r.remainingToday} left). Raise it in options if you accept the risk.`;
+      return `You hit today’s limit (${r.remainingToday} left). You can raise it in Settings.`;
     case "nothing_to_send":
-      return "Nothing to send: could not read a name from this page.";
+      return "Could not read a name on this page.";
     case "invalid_message":
-      return "This page is not a supported LinkedIn page.";
+      return "This is not a page the extension can read.";
+    case "unsupported_by_play":
+      return r.detail ?? "This play does not take people.";
     default:
       return "Rejected.";
   }
 }
 
-function summarize(r: CaptureResponse): { text: string; kind: "ok" | "err" | "warn" } {
+function summarize(r: CaptureResponse | { error?: string } | undefined): { text: string; kind: "ok" | "err" | "warn" } {
+  if (!r || !("ok" in r)) return { text: `Something went wrong: ${(r as { error?: string } | undefined)?.error ?? "no answer from the extension"}`, kind: "err" };
   if (!r.ok) return { text: describeRejection(r), kind: "err" };
   const parts: string[] = [];
-  if (r.queued) parts.push(`Queued ${r.queued}`);
-  if (r.skippedDuplicates.length) parts.push(`${r.skippedDuplicates.length} already sent (skipped)`);
+  if (r.queued) parts.push(`${r.queued} on the way`);
+  if (r.skippedDuplicates.length) parts.push(`${r.skippedDuplicates.length} pushed before`);
   parts.push(`${r.remainingToday} left today`);
   return { text: parts.join(" · "), kind: r.queued ? "ok" : "warn" };
 }
@@ -39,21 +41,45 @@ async function getSettings(): Promise<ContentSettingsResponse> {
   return send<ContentSettingsResponse>({ type: "GET_CONTENT_SETTINGS" });
 }
 
+function destinationLabel(s: ContentSettingsResponse): string {
+  return s.hasDestination ? `Push to ${s.destinationName}` : "Push";
+}
+
+/* ---------- page context reporting (feeds the side panel) ---------- */
+
+let currentContext: PageContext | null = null;
+function reportContext(ctx: PageContext): void {
+  currentContext = ctx;
+  void send({ type: "PAGE_CONTEXT", context: ctx }).catch(() => undefined);
+}
+
+function detectTotalHint(): number | null {
+  const el = document.querySelector<HTMLElement>('[data-lwe="results-count"], .search-results__total, h2.t-14, .artdeco-pagination__page-state');
+  const m = el?.textContent?.replace(/[,.\s\u00a0\u202f]/g, "").match(/(\d{1,7})\s*(results?|leads?|people)/i) ?? el?.textContent?.match(/(\d{1,7})/);
+  return m ? Number(m[1]) : null;
+}
+
 /* ---------- mount lifecycle ---------- */
 
 /** Everything a page mount owns, so navigation can tear it down completely. */
 interface Mount {
   dispose(): void;
   sendCurrent?: () => void;
+  action?: (a: Extract<BackgroundToContent, { type: "PAGE_ACTION" }>["action"]) => Promise<PageContext | null>;
+  basketChanged?: (keys: string[]) => void;
 }
 let active: Mount | null = null;
 
 /* ---------- single-record pages (profile, Sales Nav lead) ---------- */
 
 async function setupSinglePage(pageType: PageType): Promise<Mount> {
-  const panel = mountPanel(document, "LinkedIn Webhook Exporter", "Send to webhook", "Resend");
-  panel.secondary.textContent = "Force resend";
+  const panel = mountPanel(document, "Deepline", "Push", "Select instead", "Push again");
   let alive = true;
+  const light = () => parsePage(document, location.href, { includeExperience: false, includeEducation: false, includeAbout: false }).leads[0] ?? null;
+  const context = (): PageContext => {
+    const lead = light();
+    return { pageType, url: location.href, title: document.title, lead: lead?.full_name ? lead : null, rowsOnPage: 0, selectedOnPage: 0, savedSearchId: null, shareUrl: null, searchName: null, totalHint: null };
+  };
   // Attach handlers before any async work so an early click is never lost.
   const doSend = async (force: boolean) => {
     panel.primary.disabled = true;
@@ -63,7 +89,7 @@ async function setupSinglePage(pageType: PageType): Promise<Mount> {
     const { leads } = parsePage(document, location.href, { includeExperience: settings.includeExperience, includeEducation: settings.includeEducation, includeAbout: settings.includeAbout });
     const lead = leads[0];
     if (!lead || !lead.full_name) {
-      panel.setStatus("Could not read a name from this page. LinkedIn may have changed its layout.", "err");
+      panel.setStatus("Could not read a name on this page yet. Scroll a little and try again.", "err");
       panel.primary.disabled = false;
       return;
     }
@@ -73,21 +99,45 @@ async function setupSinglePage(pageType: PageType): Promise<Mount> {
     panel.setStatus(lead.parse_warnings.length && s.kind === "ok" ? `${s.text} · check: ${lead.parse_warnings.join(", ")}` : s.text, s.kind);
     panel.primary.disabled = false;
   };
+  const addToBasket = async () => {
+    const lead = light();
+    if (!lead?.full_name) return panel.setStatus("Could not read a name from this page.", "err");
+    const r = await send<BasketResponse & { added: number }>({ type: "BASKET_ADD", leads: [lead], pageType, pageUrl: location.href, pageTitle: document.title });
+    if (!alive) return;
+    panel.setStatus(r.added ? `Selected. ${r.count} so far.` : "Already selected.", r.added ? "ok" : "warn");
+  };
   panel.primary.addEventListener("click", () => void doSend(false));
-  panel.secondary.addEventListener("click", () => void doSend(true));
+  panel.secondary.addEventListener("click", () => void addToBasket());
+  panel.tertiary.addEventListener("click", () => void doSend(true));
+  panel.openPanel.addEventListener("click", () => void send({ type: "OPEN_SIDE_PANEL" }));
+  const relabel = () => void getSettings().then((s) => {
+    if (alive) panel.primary.textContent = destinationLabel(s);
+  });
+  relabel();
+  const onChange = (changes: Record<string, unknown>) => {
+    if ("settings" in changes) relabel();
+  };
+  chrome.storage.onChanged.addListener(onChange);
   // Show whether this profile was already sent.
-  const { leads } = parsePage(document, location.href, { includeExperience: false, includeEducation: false, includeAbout: false });
-  if (leads[0]?.full_name) {
-    const key = dedupeKey(leads[0]);
+  const lead = light();
+  if (lead?.full_name) {
+    const key = dedupeKey(lead);
     const seen = await send<Record<string, boolean>>({ type: "CHECK_DEDUPE", keys: [key] });
-    if (alive && seen[key]) panel.setStatus("Already sent. Use Force resend to send again.", "warn");
+    if (alive && seen[key]) panel.setStatus("Pushed before. “Push again” sends it anyway.", "warn");
   }
+  reportContext(context());
   return {
     dispose: () => {
       alive = false;
+      chrome.storage.onChanged.removeListener(onChange);
       panel.dispose();
     },
-    sendCurrent: () => void doSend(false)
+    sendCurrent: () => void doSend(false),
+    action: async (a) => {
+      if (a === "send_current") await doSend(false);
+      if (a === "add_selected" || a === "add_all") await addToBasket();
+      return context();
+    }
   };
 }
 
@@ -95,23 +145,75 @@ async function setupSinglePage(pageType: PageType): Promise<Mount> {
 
 interface RowState {
   el: HTMLElement;
-  box: HTMLInputElement;
+  pick: HTMLButtonElement;
+  key: string;
+  lead: LeadRecord;
+  /** LinkedIn's own row checkbox, mirrored when present. */
+  native: HTMLInputElement | null;
 }
 
 function parseRow(row: HTMLElement, pageType: PageType, now: string): LeadRecord | null {
   return pageType === "people_search" ? parsePeopleSearchRow(row, now) : parseSalesNavRow(row, now);
 }
 
+function nativeCheckbox(row: HTMLElement): HTMLInputElement | null {
+  const box = row.querySelector<HTMLInputElement>('input[type="checkbox"]:not([data-lwe-row-check])');
+  return box && !box.closest("[data-lwe-panel]") ? box : null;
+}
+
 async function setupListPage(pageType: PageType): Promise<Mount> {
-  const panel: PanelHandles = mountPanel(document, "LinkedIn Webhook Exporter", "Send 0 selected", "Select all on page");
+  const panel = mountPanel(document, "Deepline", "Push", "Select page", "Import search");
   const rows = new Map<HTMLElement, RowState>();
+  let basketKeys = new Set<string>();
   let alive = true;
   const disposers: Array<() => void> = [() => (alive = false), () => panel.dispose()];
+  const savedSearchId = pageType === "salesnav_search" ? savedSearchIdFrom(location.href) : null;
+  panel.tertiary.hidden = pageType !== "salesnav_search";
 
-  const refreshCount = () => {
-    const n = Array.from(rows.values()).filter((r) => r.box.checked).length;
-    panel.primary.textContent = `Send ${n} selected`;
-    panel.primary.disabled = n === 0;
+  const context = (): PageContext => ({
+    pageType,
+    url: location.href,
+    title: document.title,
+    lead: null,
+    rowsOnPage: rows.size,
+    selectedOnPage: Array.from(rows.values()).filter((r) => basketKeys.has(r.key)).length,
+    savedSearchId,
+    shareUrl: null,
+    searchName: searchName(location.href, pageType, document.title),
+    totalHint: detectTotalHint()
+  });
+
+  const refresh = () => {
+    let sel = 0;
+    for (const r of rows.values()) {
+      const picked = basketKeys.has(r.key);
+      if (picked) sel++;
+      setPicked(r.pick, picked);
+      if (r.native && r.native.checked !== picked && !r.native.disabled) {
+        // Mirror our state onto LinkedIn's checkbox without firing its handlers twice.
+        r.native.checked = picked;
+      }
+    }
+    panel.primary.textContent = basketKeys.size ? `Push ${basketKeys.size}` : "Push";
+    panel.primary.disabled = basketKeys.size === 0;
+    panel.count.textContent = sel ? `${sel}/${rows.size}` : "";
+    panel.count.title = `${sel} of ${rows.size} on this page selected`;
+    panel.title.textContent = `Deepline · ${rows.size} on page · ${sel} selected`;
+    reportContext(context());
+  };
+
+  const toggle = async (st: RowState, on: boolean) => {
+    if (on) {
+      const r = await send<BasketResponse & { added: number; full: boolean }>({ type: "BASKET_ADD", leads: [st.lead], pageType, pageUrl: location.href, pageTitle: document.title });
+      if (!alive) return;
+      if (r.full) panel.setStatus("You have 500 people selected, the maximum. Push or clear them first.", "warn");
+      basketKeys = new Set(r.items.map((i) => i.key));
+    } else {
+      const r = await send<BasketResponse>({ type: "BASKET_REMOVE", keys: [st.key] });
+      if (!alive) return;
+      basketKeys = new Set(r.items.map((i) => i.key));
+    }
+    refresh();
   };
 
   let decorating = false;
@@ -127,73 +229,130 @@ async function setupListPage(pageType: PageType): Promise<Mount> {
         const lead = parseRow(el, pageType, now);
         if (!lead) continue;
         el.classList.add("lwe-row-host");
-        const box = document.createElement("input");
-        box.type = "checkbox";
-        box.className = "lwe-check";
-        box.setAttribute("data-lwe-row-check", "");
-        box.setAttribute("aria-label", `Select ${lead.full_name} for webhook`);
-        box.title = "Select for webhook";
-        box.addEventListener("change", refreshCount);
-        el.prepend(box);
-        rows.set(el, { el, box });
-        keys.push(dedupeKey(lead));
+        const pick = makePick(document, lead.full_name);
+        const key = dedupeKey(lead);
+        const st: RowState = { el, pick, key, lead, native: nativeCheckbox(el) };
+        pick.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          void toggle(st, !basketKeys.has(st.key));
+        });
+        if (st.native) {
+          const onNative = () => {
+            if (!alive) return;
+            const want = !!st.native?.checked;
+            if (want !== basketKeys.has(st.key)) void toggle(st, want);
+          };
+          st.native.addEventListener("change", onNative);
+          disposers.push(() => st.native?.removeEventListener("change", onNative));
+        }
+        el.appendChild(pick);
+        rows.set(el, st);
+        keys.push(key);
       }
       // Rows LinkedIn removed (virtualized lists) are dropped from the map.
       for (const [el, st] of rows) {
         if (!el.isConnected) {
           rows.delete(el);
-          st.box.remove();
+          st.pick.remove();
         }
       }
       if (keys.length) {
         const seen = await send<Record<string, boolean>>({ type: "CHECK_DEDUPE", keys });
         if (!alive) return; // navigated away while waiting
-        for (const [el, st] of rows) {
-          const lead = parseRow(el, pageType, now);
-          if (lead && seen[dedupeKey(lead)]) {
+        for (const st of rows.values()) {
+          if (seen[st.key]) {
             st.el.classList.add("lwe-sent");
-            st.box.title = "Already sent";
+            st.pick.title = "Already sent";
           }
         }
       }
-      refreshCount();
-      panel.title.textContent = `LinkedIn Webhook Exporter · ${rows.size} on page`;
+      refresh();
     } finally {
       decorating = false;
     }
   };
 
-  panel.secondary.addEventListener("click", () => {
+  const addAll = async (): Promise<void> => {
     const all = Array.from(rows.values());
-    const anyUnchecked = all.some((r) => !r.box.checked);
-    for (const r of all) r.box.checked = anyUnchecked;
-    panel.secondary.textContent = anyUnchecked ? "Clear selection" : "Select all on page";
-    refreshCount();
-  });
+    const unpicked = all.filter((r) => !basketKeys.has(r.key));
+    if (!unpicked.length) {
+      // Everything on the page is in already: the second click clears the page.
+      const r = await send<BasketResponse>({ type: "BASKET_REMOVE", keys: all.map((x) => x.key) });
+      if (!alive) return;
+      basketKeys = new Set(r.items.map((i) => i.key));
+      panel.secondary.textContent = "Select page";
+      return refresh();
+    }
+    const r = await send<BasketResponse & { added: number; full: boolean }>({ type: "BASKET_ADD", leads: unpicked.map((x) => x.lead), pageType, pageUrl: location.href, pageTitle: document.title });
+    if (!alive) return;
+    basketKeys = new Set(r.items.map((i) => i.key));
+    panel.secondary.textContent = "Unselect page";
+    panel.setStatus(r.full ? "You have 500 people selected, the maximum. Push or clear them first." : `${r.count} selected${r.pages > 1 ? ` across ${r.pages} pages` : ""}. Next page to add more, or Push.`, r.full ? "warn" : "ok");
+    refresh();
+  };
 
-  panel.primary.addEventListener("click", async () => {
-    const now = new Date().toISOString();
-    const selected = Array.from(rows.values()).filter((r) => r.box.checked);
-    const leads = selected.map((r) => parseRow(r.el, pageType, now)).filter((l): l is LeadRecord => !!l);
-    if (!leads.length) return;
+  /** Add only the rows LinkedIn's own checkboxes have selected. */
+  const addSelected = async (): Promise<void> => {
+    const picked = Array.from(rows.values()).filter((r) => r.native?.checked && !basketKeys.has(r.key));
+    if (!picked.length) return addAll();
+    const r = await send<BasketResponse & { added: number; full: boolean }>({ type: "BASKET_ADD", leads: picked.map((x) => x.lead), pageType, pageUrl: location.href, pageTitle: document.title });
+    if (!alive) return;
+    basketKeys = new Set(r.items.map((i) => i.key));
+    refresh();
+  };
+
+  const sendBasket = async (): Promise<void> => {
     panel.primary.disabled = true;
-    panel.setStatus(`Sending ${leads.length}…`);
-    const res = await send<CaptureResponse>({ type: "CAPTURE", leads, pageType, pageUrl: location.href, importId: NEW_ID(), importKind: "manual", pageTitle: document.title });
+    panel.setStatus(`Pushing ${basketKeys.size}…`);
+    const before = new Set(basketKeys);
+    const res = await send<CaptureResponse & { sentFromPages: number }>({ type: "BASKET_SEND" });
     if (!alive) return;
     const s = summarize(res);
-    panel.setStatus(s.text, s.kind);
-    if (res.ok) {
-      for (const r of selected) {
-        r.box.checked = false;
-        r.el.classList.add("lwe-sent");
-      }
-      disposers.push(toast(document, s.text));
-    }
-    refreshCount();
-  });
+    panel.setStatus(res.ok && res.sentFromPages > 1 ? `${s.text} · from ${res.sentFromPages} pages` : s.text, s.kind);
+    const b = await send<BasketResponse>({ type: "BASKET_GET" });
+    if (!alive) return;
+    basketKeys = new Set(b.items.map((i) => i.key));
+    // Only rows that were selected and left the basket were pushed.
+    for (const st of rows.values()) if (res.ok && before.has(st.key) && !basketKeys.has(st.key)) st.el.classList.add("lwe-sent");
+    if (res.ok) disposers.push(toast(document, s.text));
+    refresh();
+  };
 
+  const sendSearch = async (limit?: number): Promise<void> => {
+    const settings = await getSettings();
+    if (!alive) return;
+    const r = await send<{ ok: boolean; queued: boolean; duplicate: boolean; rejectedReason: string | null; detail?: string | null }>({ type: "SEARCH_CAPTURE", url: location.href, pageType, totalHint: detectTotalHint(), limit: limit ?? settings.searchDefaultLimit, searchName: searchName(location.href, pageType, document.title) });
+    if (!alive) return;
+    if (!r.ok) {
+      const why =
+        r.rejectedReason === "no_destination"
+          ? "Choose where to send first (open the panel)."
+          : r.rejectedReason === "saved_search_needs_share_link"
+            ? "This is a saved search. Click Sales Navigator's “Share search” (bottom left) once, then try again."
+            : r.rejectedReason === "unsupported_by_play"
+              ? (r.detail ?? "This play does not take a search.")
+              : "Could not import this search.";
+      panel.setStatus(why, "err");
+    } else panel.setStatus(r.duplicate ? "This search was already imported." : `Importing up to ${limit ?? settings.searchDefaultLimit} people in the background.`, r.duplicate ? "warn" : "ok");
+  };
+
+  const shareSearch = (): boolean => {
+    const btn = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find((b) => /share search/i.test(b.textContent ?? ""));
+    if (!btn) return false;
+    btn.click();
+    return true;
+  };
+
+  panel.secondary.addEventListener("click", () => void addAll());
+  panel.primary.addEventListener("click", () => void sendBasket());
+  panel.tertiary.addEventListener("click", () => void sendSearch());
+  panel.openPanel.addEventListener("click", () => void send({ type: "OPEN_SIDE_PANEL" }));
+
+  const b = await send<BasketResponse>({ type: "BASKET_GET" }).catch(() => ({ items: [] as BasketResponse["items"], count: 0, pages: 0 }));
+  if (!alive) return { dispose: () => disposers.splice(0).forEach((d) => d()) };
+  basketKeys = new Set(b.items.map((i) => i.key));
   await decorate();
-  await setupExportControls(panel, pageType, disposers);
   // LinkedIn renders lists incrementally and on scroll; observe the results
   // container (not the whole body) for new rows, debounced.
   const container = document.querySelector("#search-results-container, main") ?? document.body;
@@ -207,170 +366,51 @@ async function setupListPage(pageType: PageType): Promise<Mount> {
     mo.disconnect();
     if (debounce != null) clearTimeout(debounce);
     for (const st of rows.values()) {
-      st.box.remove();
-      st.el.classList.remove("lwe-row-host", "lwe-sent");
+      st.pick.remove();
+      st.el.classList.remove("lwe-row-host", "lwe-sent", "lwe-in-basket");
     }
     rows.clear();
   });
-  return { dispose: () => disposers.splice(0).forEach((d) => d()) };
-}
-
-/* ---------- bulk export: collect one page on request ---------- */
-
-function resultsScroller(): HTMLElement {
-  const candidates = ["#search-results-container", ".search-results-container", "main"];
-  for (const sel of candidates) {
-    const el = document.querySelector<HTMLElement>(sel);
-    if (el && el.scrollHeight > el.clientHeight + 50) return el;
-  }
-  return document.scrollingElement as HTMLElement;
-}
-
-const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-
-/** Sales Navigator renders rows lazily as you scroll (only on real/smooth
- *  scrolling). Scroll in steps, wait for the scroll position to settle and
- *  for the DOM to be quiet, and stop when the row count is stable at the
- *  bottom. Bounded by time and iterations. */
-async function autoScroll(pageType: PageType, maxMs = 25_000): Promise<void> {
-  const el = resultsScroller();
-  const started = Date.now();
-  let stable = 0;
-  let last = -1;
-  let lastMutation = Date.now();
-  const mo = new MutationObserver(() => (lastMutation = Date.now()));
-  mo.observe(el, { childList: true, subtree: true });
-  try {
-    for (let i = 0; i < 60 && stable < 3 && Date.now() - started < maxMs; i++) {
-      const target = Math.min(el.scrollHeight, el.scrollTop + Math.max(400, el.clientHeight * 0.8));
-      el.scrollTo({ top: target, behavior: "smooth" });
-      // Wait for the smooth scroll to settle.
-      let prev = -1;
-      for (let k = 0; k < 20 && el.scrollTop !== prev; k++) {
-        prev = el.scrollTop;
-        await wait(100);
-      }
-      // Quiet period: no DOM mutations for 500 ms (lazy rows finished rendering).
-      for (let k = 0; k < 20 && Date.now() - lastMutation < 500; k++) await wait(100);
-      const n = listRows(document, pageType).length;
-      const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 5;
-      stable = n === last && atBottom ? stable + 1 : 0;
-      last = n;
+  return {
+    dispose: () => disposers.splice(0).forEach((d) => d()),
+    basketChanged: (keys) => {
+      basketKeys = new Set(keys);
+      refresh();
+    },
+    action: async (a) => {
+      if (a === "add_all") await addAll();
+      else if (a === "add_selected") await addSelected();
+      else if (a === "clear_page") {
+        const r = await send<BasketResponse>({ type: "BASKET_REMOVE", keys: Array.from(rows.values()).map((x) => x.key) });
+        basketKeys = new Set(r.items.map((i) => i.key));
+        refresh();
+      } else if (a === "share_search") {
+        if (!shareSearch()) panel.setStatus("Could not find Sales Navigator's “Share search” button on this page.", "err");
+        else panel.setStatus("Getting the shareable link…");
+      } else if (a === "refresh") await decorate();
+      return context();
     }
-  } finally {
-    mo.disconnect();
-    el.scrollTo({ top: 0 });
-  }
-}
-
-/** Next-page decision. A real pagination control is authoritative; the row
- *  count is only a fallback and is reported as such so the export job can
- *  stop on an empty page rather than trusting a guess. */
-function detectHasNext(rowCount: number, pageType: PageType): { hasNext: boolean; source: "control" | "row_count" | "none" } {
-  const next = document.querySelector<HTMLButtonElement>('[data-lwe="next-page"], button[aria-label="Next"], button.artdeco-pagination__button--next, a[aria-label="Next"], button[aria-label="Weiter"], button[aria-label="Suivant"]');
-  if (next) return { hasNext: !next.disabled && next.getAttribute("aria-disabled") !== "true", source: "control" };
-  // LinkedIn people search shows 10 per page; Sales Navigator shows 25.
-  const pageSize = pageType === "people_search" ? 10 : 25;
-  return rowCount >= pageSize ? { hasNext: true, source: "row_count" } : { hasNext: false, source: "none" };
-}
-
-function detectTotalHint(): number | null {
-  const el = document.querySelector<HTMLElement>('[data-lwe="results-count"], .search-results__total, h2.t-14, .artdeco-pagination__page-state');
-  return parseTotalHint(el?.textContent ?? null);
-}
-
-async function collectPage(jobId: string, expectedPage: number): Promise<CollectResponse> {
-  const pageType = detectPageType(location.pathname);
-  const base = { jobId, expectedPage, pageType, pageUrl: location.href, leads: [] as LeadRecord[], hasNext: false, hasNextSource: "none" as const, totalHint: null };
-  if (!pageType || !isListPage(pageType)) return { ...base, ok: false, error: "not_a_list_page" };
-  await autoScroll(pageType);
-  // The page may have navigated during the scroll; report the URL we parsed.
-  const pageUrl = location.href;
-  const { leads } = parsePage(document, pageUrl);
-  const next = detectHasNext(leads.length, pageType);
-  return { ...base, ok: true, pageUrl, leads, hasNext: next.hasNext, hasNextSource: next.source, totalHint: detectTotalHint(), error: null };
-}
-
-function describeJob(job: ExportJob): string {
-  const base = `Page ${job.pagesDone}${job.totalHint ? ` of ~${Math.min(100, Math.ceil(job.totalHint / 25))}` : ""} · ${job.collected} collected · ${job.sent} sent · ${job.skipped} already sent`;
-  switch (job.status) {
-    case "running":
-      return `Exporting… ${base}`;
-    case "paused":
-      return `Paused. ${base}`;
-    case "done":
-      return `Done (${job.stopReason === "limit" ? "limit reached" : "no more results"}). ${base}`;
-    case "stopped":
-      return `Stopped${job.stopReason === "daily_cap" ? " at daily cap" : ""}. ${base}`;
-    case "error":
-      return `Failed: ${job.lastError}. ${base}`;
-  }
-}
-
-async function setupExportControls(panel: PanelHandles, pageType: PageType, disposers: Array<() => void>): Promise<void> {
-  const settings = await getSettings();
-  if (!panel.host.isConnected) return; // torn down while settings loaded
-  const ctl = mountExportControls(panel, settings.exportDefaultLimit);
-  let timer: number | null = null;
-  const stopTimer = () => {
-    if (timer != null) clearInterval(timer);
-    timer = null;
   };
-  disposers.push(stopTimer);
-
-  const render = (st: ExportStatusResponse) => {
-    if (!panel.host.isConnected) return stopTimer();
-    // Show the finished job too, but only on the tab it ran in.
-    const job = st.job ?? (st.thisTab ? st.history[0] ?? null : null);
-    const isActive = !!job && (job.status === "running" || job.status === "paused");
-    ctl.form.hidden = isActive;
-    ctl.progress.hidden = !job;
-    if (job) {
-      ctl.progressText.textContent = describeJob(job);
-      ctl.pause.hidden = !isActive;
-      ctl.pause.textContent = job.status === "paused" ? "Resume" : "Pause";
-      ctl.stopBtn.hidden = !isActive;
-    }
-    if (isActive && timer == null) timer = window.setInterval(poll, 2000);
-    if (!isActive) stopTimer();
-  };
-  const poll = async () => {
-    if (!panel.host.isConnected) return stopTimer();
-    render(await send<ExportStatusResponse>({ type: "EXPORT_STATUS" }));
-  };
-
-  ctl.start.addEventListener("click", async () => {
-    const limit = Math.max(1, Math.min(2500, Number(ctl.limit.value) || settings.exportDefaultLimit));
-    const st = await send<ExportStatusResponse & { error?: string }>({ type: "EXPORT_START", url: location.href, limit });
-    if (!panel.host.isConnected) return;
-    if (st.error) {
-      panel.setStatus(st.error === "no_webhook" ? "No webhook configured. Open the extension options." : st.error === "job_running" ? "Another export is already running." : `Cannot export: ${st.error}`, "err");
-      return;
-    }
-    render(st);
-  });
-  ctl.pause.addEventListener("click", async () => {
-    const st = await send<ExportStatusResponse>({ type: "EXPORT_STATUS" });
-    render(await send<ExportStatusResponse>({ type: st.job?.status === "paused" ? "EXPORT_RESUME" : "EXPORT_PAUSE" }));
-  });
-  ctl.stopBtn.addEventListener("click", async () => render(await send<ExportStatusResponse>({ type: "EXPORT_STOP" })));
-  ctl.saveSearch.addEventListener("click", async () => {
-    const r = await send<{ ok: boolean; queued: boolean; duplicate: boolean; rejectedReason: CaptureResponse["rejectedReason"] }>({ type: "SEARCH_CAPTURE", url: location.href, pageType, totalHint: detectTotalHint() });
-    if (!r.ok) panel.setStatus(r.rejectedReason === "no_webhook" ? "No webhook configured. Open the extension options." : "Could not save search.", "err");
-    else panel.setStatus(r.duplicate ? "Search already saved." : "Search saved to webhook.", r.duplicate ? "warn" : "ok");
-  });
-  await poll();
 }
 
 /* ---------- single global message listener ---------- */
 
 chrome.runtime.onMessage.addListener((m: BackgroundToContent, _s, sendResponse) => {
-  if (m?.type === "EXPORT_COLLECT") {
-    collectPage(String(m.jobId), Number(m.expectedPage)).then(sendResponse, (e) => sendResponse({ ok: false, jobId: String(m.jobId), expectedPage: Number(m.expectedPage), pageType: null, pageUrl: location.href, leads: [], hasNext: false, hasNextSource: "none", totalHint: null, error: e instanceof Error ? e.message : String(e) }));
+  if (m?.type === "PAGE_ACTION") {
+    const run = active?.action ? active.action(m.action) : Promise.resolve(currentContext);
+    run.then((ctx) => sendResponse(ctx ?? currentContext), () => sendResponse(currentContext));
     return true;
   }
+  if (m?.type === "BASKET_CHANGED") active?.basketChanged?.(Array.isArray(m.keys) ? m.keys.filter((k): k is string => typeof k === "string") : []);
   if (m?.type === "SEND_CURRENT") active?.sendCurrent?.();
   return false;
+});
+
+// Share links copied by Sales Navigator's "Share search" (see main-world.ts).
+window.addEventListener("message", (e) => {
+  if (e.source !== window || e.origin !== location.origin || !e.data || typeof e.data !== "object") return;
+  const url = (e.data as Record<string, unknown>).__lwe_share_link__;
+  if (typeof url === "string") void send({ type: "SHARE_LINK", url }).catch(() => undefined);
 });
 
 /* ---------- navigation controller ---------- */
@@ -396,7 +436,10 @@ function boot(): void {
     active?.dispose();
     active = null;
     const pageType = detectPageType(location.pathname);
-    if (!pageType) return;
+    if (!pageType) {
+      reportContext({ pageType: null, url: location.href, title: document.title, lead: null, rowsOnPage: 0, selectedOnPage: 0, savedSearchId: null, shareUrl: null, searchName: null, totalHint: null });
+      return;
+    }
     const mount = isListPage(pageType) ? await setupListPage(pageType) : await setupSinglePage(pageType);
     // A navigation during setup wins: tear down what we just built.
     if (routeKey() !== key) mount.dispose();

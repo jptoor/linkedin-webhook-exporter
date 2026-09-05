@@ -1,24 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { isSameSearchPage } from "../../src/shared/export-job";
 import { append, redact, redactUrl, LOG_MAX_BYTES } from "../../src/shared/log";
 import { parseProfile } from "../../src/content/parsers/profile";
 import { parsePeopleSearchPage } from "../../src/content/parsers/search";
 import { loadSample } from "./helpers";
-
-describe("NF-02 export page ownership", () => {
-  const base = "https://www.linkedin.com/sales/search/people?query=(keywords%3Acro)&sessionId=A";
-  it("accepts the same search with a different session id or page param position, rejects changed filters", () => {
-    expect(isSameSearchPage(base, "https://www.linkedin.com/sales/search/people?query=(keywords%3Acro)&sessionId=B")).toBe(true);
-    expect(isSameSearchPage(base + "&page=1", base)).toBe(true);
-    expect(isSameSearchPage("https://www.linkedin.com/sales/search/people?page=2&query=(keywords%3Acro)", base + "&page=2")).toBe(true);
-    expect(isSameSearchPage(base + "&page=2", base)).toBe(false);
-    expect(isSameSearchPage("https://www.linkedin.com/sales/search/people?query=(keywords%3Acto)", base)).toBe(false);
-    expect(isSameSearchPage("https://www.linkedin.com/sales/search/people?query=(keywords%3Acro)&extra=1", base)).toBe(false);
-    expect(isSameSearchPage("https://evil.example/sales/search/people?query=(keywords%3Acro)", base)).toBe(false);
-    expect(isSameSearchPage(undefined, base)).toBe(false);
-    expect(isSameSearchPage("nope", base)).toBe(false);
-  });
-});
 
 describe("NF-07 activity log hygiene", () => {
   it("redacts session/tracking params and fragments from URLs anywhere in a log entry", () => {

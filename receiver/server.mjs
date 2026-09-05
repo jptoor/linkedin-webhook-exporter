@@ -293,7 +293,7 @@ export function extractImport(payload) {
   if (!i) return null;
   const id = str(i.import_id, 64);
   if (!id || !EVENT_ID_RE.test(id)) return null;
-  return { import_id: id, imported_by: str(i.imported_by, 200), imported_at: str(i.imported_at, 40), import_kind: i.import_kind === "export" ? "export" : "manual", search_url: provenanceUrl(i.search_url), search_name: str(i.search_name, 200), list_id: str(i.list_id, 64), page: Number.isInteger(i.page) && i.page > 0 ? i.page : null };
+  return { import_id: id, imported_by: str(i.imported_by, 200), imported_at: str(i.imported_at, 40), import_kind: ["basket", "search", "export"].includes(i.import_kind) ? i.import_kind : "manual", search_url: provenanceUrl(i.search_url), search_name: str(i.search_name, 200), list_id: str(i.list_id, 64), page: Number.isInteger(i.page) && i.page > 0 ? i.page : null };
 }
 
 /* ------------------------------------------------------------ auth */

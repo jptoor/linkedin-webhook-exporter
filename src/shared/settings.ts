@@ -1,5 +1,6 @@
+import { inferPlayInput, normalizeBaseUrl } from "./deepline";
 import { logEvent } from "./log";
-import { DEFAULT_SETTINGS, LIMITS, MAPPING_PRESETS, type ContentSettings, type Settings } from "./types";
+import { DEFAULT_SETTINGS, LIMITS, MAPPING_PRESETS, type ContentSettings, type Destination, type PlayDestination, type PlayInputSpec, type Settings, type WebhookDestination } from "./types";
 
 const KEY = "settings";
 
@@ -8,6 +9,7 @@ const KEY = "settings";
 const FORBIDDEN_HEADERS = new Set(["host", "content-length", "content-type", "cookie", "origin", "referer", "connection", "transfer-encoding", "x-lwe-signature", "x-lwe-timestamp", "x-lwe-event-id", "webhook-id", "webhook-timestamp", "webhook-signature", "idempotency-key"]);
 const HEADER_NAME_RE = /^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,100}$/;
 const HEADER_VALUE_RE = /^[\t\x20-\x7E\x80-\xFF]{0,4096}$/; // no CR/LF/control chars
+const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
 export function validateHeader(name: string, value: string): { ok: boolean; reason: string | null } {
   if (!name && !value) return { ok: true, reason: null };
@@ -33,9 +35,82 @@ function str(v: unknown, max: number, fallback = ""): string {
 function bool(v: unknown, fallback: boolean): boolean {
   return typeof v === "boolean" ? v : fallback;
 }
+function strList(v: unknown, max = 100): string[] {
+  return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string").slice(0, max).map((s) => s.slice(0, 100)) : [];
+}
+
+export function newId(): string {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID().replace(/-/g, "").slice(0, 20) : `d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function sanitizePlayInput(v: unknown): PlayInputSpec {
+  const o = (v && typeof v === "object" ? v : {}) as Record<string, unknown>;
+  const mode = o.mode === "batch" || o.mode === "lead" ? o.mode : "mapped";
+  const fields = strList(o.fields);
+  return { mode, fields, required: strList(o.required).filter((r) => !fields.length || fields.includes(r)), acceptsSearch: bool(o.acceptsSearch, !fields.length), acceptsLeads: bool(o.acceptsLeads, true) };
+}
+
+/** Coerce one stored/submitted destination. Returns null when it cannot be
+ *  made valid (unknown kind, missing URL/key). */
+export function sanitizeDestination(input: unknown): Destination | null {
+  const d = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
+  const id = ID_RE.test(str(d.id, 64)) ? str(d.id, 64) : newId();
+  if (d.kind === "deepline_play") {
+    let baseUrl: string;
+    try {
+      baseUrl = normalizeBaseUrl(str(d.baseUrl, 2048));
+    } catch {
+      return null;
+    }
+    const playKey = str(d.playKey, 300).trim();
+    if (!playKey) return null;
+    const out: PlayDestination = {
+      id,
+      kind: "deepline_play",
+      name: str(d.name, 100).trim() || str(d.playName, 100).trim() || playKey,
+      favorite: bool(d.favorite, false),
+      baseUrl,
+      apiKey: str(d.apiKey, 4096).trim(),
+      playKey,
+      playName: str(d.playName, 200).trim() || playKey,
+      input: d.input ? sanitizePlayInput(d.input) : inferPlayInput(null)
+    };
+    return out;
+  }
+  if (d.kind === "webhook" || typeof d.url === "string" || typeof d.webhookUrl === "string") {
+    const url = str(d.url ?? d.webhookUrl, 2048).trim();
+    if (!url || !validateWebhookUrl(url).ok) return null;
+    const header = validateHeader(str(d.authHeaderName, 100).trim(), str(d.authHeaderValue, 4096).trim());
+    const out: WebhookDestination = {
+      id,
+      kind: "webhook",
+      name: str(d.name, 100).trim() || safeHost(url),
+      favorite: bool(d.favorite, false),
+      url,
+      signingSecret: str(d.signingSecret, 4096),
+      signatureScheme: d.signatureScheme === "standard" ? "standard" : "lwe",
+      authHeaderName: header.ok ? str(d.authHeaderName, 100).trim() : "",
+      authHeaderValue: header.ok ? str(d.authHeaderValue, 4096).trim() : "",
+      mappingPreset: (MAPPING_PRESETS as readonly string[]).includes(d.mappingPreset as string) ? (d.mappingPreset as WebhookDestination["mappingPreset"]) : "generic",
+      sendMode: d.sendMode === "batch" ? "batch" : "single"
+    };
+    return out;
+  }
+  return null;
+}
+
+function safeHost(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return "webhook";
+  }
+}
 
 /** Coerce anything stored (or supplied by the options page) into a valid
- *  Settings object. Invalid values fall back to defaults; numbers are clamped. */
+ *  Settings object. Invalid values fall back to defaults; numbers are clamped.
+ *  A v1 single-webhook configuration (webhookUrl + signing fields at the top
+ *  level) is migrated into the first destination. */
 export function sanitizeSettings(input: unknown): Settings {
   const s = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
   const custom: Record<string, string> = {};
@@ -45,16 +120,25 @@ export function sanitizeSettings(input: unknown): Settings {
       if (key && typeof v === "string") custom[key] = v.slice(0, LIMITS.customValueMax);
     }
   }
-  const header = validateHeader(str(s.authHeaderName, 100), str(s.authHeaderValue, 4096));
-  const minDelay = clampInt(s.exportPageDelayMinMs, LIMITS.pageDelayMinFloorMs, LIMITS.pageDelayMaxMs, DEFAULT_SETTINGS.exportPageDelayMinMs);
+  const destinations: Destination[] = [];
+  const seen = new Set<string>();
+  for (const raw of Array.isArray(s.destinations) ? s.destinations.slice(0, LIMITS.destinationsMax) : []) {
+    const d = sanitizeDestination(raw);
+    if (d && !seen.has(d.id)) {
+      seen.add(d.id);
+      destinations.push(d);
+    }
+  }
+  // v1 migration: a top-level webhookUrl becomes a destination once.
+  if (!destinations.length && typeof s.webhookUrl === "string" && s.webhookUrl.trim()) {
+    const legacy = sanitizeDestination({ kind: "webhook", id: "legacy-webhook", name: "Webhook", url: s.webhookUrl, signingSecret: s.signingSecret, signatureScheme: s.signatureScheme, authHeaderName: s.authHeaderName, authHeaderValue: s.authHeaderValue, mappingPreset: s.mappingPreset, sendMode: s.sendMode });
+    if (legacy) destinations.push(legacy);
+  }
+  const wanted = str(s.activeDestinationId, 64);
+  const activeDestinationId = destinations.some((d) => d.id === wanted) ? wanted : (destinations[0]?.id ?? null);
   return {
-    webhookUrl: str(s.webhookUrl, 2048).trim(),
-    signingSecret: str(s.signingSecret, 4096),
-    signatureScheme: s.signatureScheme === "standard" ? "standard" : "lwe",
-    authHeaderName: header.ok ? str(s.authHeaderName, 100).trim() : "",
-    authHeaderValue: header.ok ? str(s.authHeaderValue, 4096).trim() : "",
-    mappingPreset: (MAPPING_PRESETS as readonly string[]).includes(s.mappingPreset as string) ? (s.mappingPreset as Settings["mappingPreset"]) : "generic",
-    sendMode: s.sendMode === "batch" ? "batch" : "single",
+    destinations,
+    activeDestinationId,
     dedupe: bool(s.dedupe, DEFAULT_SETTINGS.dedupe),
     dedupeTtlDays: clampInt(s.dedupeTtlDays, 1, LIMITS.dedupeTtlDaysMax, DEFAULT_SETTINGS.dedupeTtlDays),
     dailyCap: clampInt(s.dailyCap, 1, LIMITS.dailyCapMax, DEFAULT_SETTINGS.dailyCap),
@@ -63,9 +147,7 @@ export function sanitizeSettings(input: unknown): Settings {
     includeExperience: bool(s.includeExperience, true),
     includeEducation: bool(s.includeEducation, true),
     includeAbout: bool(s.includeAbout, true),
-    exportDefaultLimit: clampInt(s.exportDefaultLimit, 1, LIMITS.exportLimitMax, DEFAULT_SETTINGS.exportDefaultLimit),
-    exportPageDelayMinMs: minDelay,
-    exportPageDelayMaxMs: Math.max(minDelay, clampInt(s.exportPageDelayMaxMs, LIMITS.pageDelayMinFloorMs, LIMITS.pageDelayMaxMs, DEFAULT_SETTINGS.exportPageDelayMaxMs))
+    searchDefaultLimit: clampInt(s.searchDefaultLimit, 1, LIMITS.searchLimitMax, DEFAULT_SETTINGS.searchDefaultLimit)
   };
 }
 
@@ -74,17 +156,40 @@ export async function getSettings(): Promise<Settings> {
   return sanitizeSettings({ ...DEFAULT_SETTINGS, ...(res[KEY] ?? {}) });
 }
 
+export function describeDestination(d: Destination | null | undefined): string {
+  if (!d) return "no destination";
+  return d.kind === "webhook" ? `${d.name} (${safeHost(d.url)})` : `${d.name} (${d.playKey} @ ${safeHost(d.baseUrl)})`;
+}
+
 export async function saveSettings(patch: Partial<Settings>): Promise<Settings> {
   const current = await getSettings();
   const next = sanitizeSettings({ ...current, ...patch });
   await chrome.storage.local.set({ [KEY]: next });
   const changed = (Object.keys(next) as Array<keyof Settings>).filter((k) => JSON.stringify(next[k]) !== JSON.stringify(current[k]));
-  if (changed.length) await logEvent("settings.saved", `Settings changed: ${changed.join(", ")}`, { changed, webhookHost: next.webhookUrl ? new URL(next.webhookUrl).host : null, preset: next.mappingPreset, sendMode: next.sendMode, dailyCap: next.dailyCap });
+  if (changed.length) {
+    await logEvent("settings.saved", `Settings changed: ${changed.join(", ")}`, {
+      changed,
+      destinations: next.destinations.map((d) => ({ id: d.id, kind: d.kind, name: d.name, host: safeHost(d.kind === "webhook" ? d.url : d.baseUrl), play: d.kind === "deepline_play" ? d.playKey : null })),
+      active: next.activeDestinationId,
+      dailyCap: next.dailyCap
+    });
+  }
   return next;
 }
 
+export function activeDestination(s: Settings): Destination | null {
+  return s.destinations.find((d) => d.id === s.activeDestinationId) ?? null;
+}
+
 export function toContentSettings(s: Settings): ContentSettings {
-  return { includeExperience: s.includeExperience, includeEducation: s.includeEducation, includeAbout: s.includeAbout, exportDefaultLimit: s.exportDefaultLimit, dedupe: s.dedupe, sendMode: s.sendMode, hasWebhook: !!s.webhookUrl };
+  const d = activeDestination(s);
+  return { includeExperience: s.includeExperience, includeEducation: s.includeEducation, includeAbout: s.includeAbout, dedupe: s.dedupe, searchDefaultLimit: s.searchDefaultLimit, hasDestination: !!d, destinationName: d?.name ?? null, destinationKind: d?.kind ?? null };
+}
+
+/** Destinations with secrets blanked, for extension pages that only need to
+ *  pick one (the side panel). The options page reads full settings. */
+export function redactDestination(d: Destination): Destination {
+  return d.kind === "webhook" ? { ...d, signingSecret: d.signingSecret ? "•••" : "", authHeaderValue: d.authHeaderValue ? "•••" : "" } : { ...d, apiKey: d.apiKey ? "•••" : "" };
 }
 
 /** Validate a webhook URL: must be https, or http on localhost/127.0.0.1 for development. */
