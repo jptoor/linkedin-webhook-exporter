@@ -175,6 +175,58 @@ name another one.
 A v0.1 single-webhook configuration is migrated into the first destination
 on read.
 
+### 4.2f Page bridge (LinkedIn API responses)
+
+A MAIN-world content script (`content/page-bridge.ts`, `document_start`)
+wraps `XMLHttpRequest.prototype.open` and `window.fetch`. When the page
+itself loads one of the allow-listed URLs (`/sales-api/salesApiLeadSearch`,
+`salesApiPeopleSearch`, `salesApiProfiles`, `salesApiCompanies`,
+`salesApiAccountSearch`, `salesApiDashboardAccountTable`,
+`/voyager/api/graphql`, `/voyager/api/search/dash/clusters`,
+`/voyager/api/identity/dash/profiles`; the same set Frontier intercepts on
+LinkedIn) the response text (≤ 2 MB) is posted to the content script on the
+page's origin under the `LWE_BRIDGE` channel. The bridge never issues,
+modifies or replays a request.
+
+`shared/linkedin-api.ts` walks the payload (bounded: 20k nodes, depth 12)
+and collects people: Sales Navigator ids (`ACwAAA…`), Voyager profile ids
+(`ACoAAA…`), public identifiers / flagship URLs, names, current role and
+company (with company URL), region, degree, photo, summary, plus the search
+`paging.total`. The content script keeps an `ApiIndex` per route and
+`enrichLead()` merges it into DOM-parsed records: DOM values that were read
+cleanly win; API values fill nulls, replace fields the parser flagged as
+guessed, add the public `linkedin_url` Sales Navigator never renders, and
+append the `api_merged` warning. Rows already decorated are re-parsed when
+data lands. Off switch: Settings `intercept`; remote kill flag `intercept`.
+
+### 4.2g Deepline sign-in (session)
+
+Like Frontier picking up its web app's cookies, the extension treats the
+rep's Deepline sign-in as its credential. `cookies` permission is scoped to
+the Deepline host; only the presence of `better-auth.session_token` is
+checked. `GET /api/v2/auth/session` with `credentials: "include"` returns
+the user and active org; `chrome.cookies.onChanged` refreshes state and
+broadcasts `AUTH_CHANGED`. Plays are listed and run the same way (no
+`Authorization` header, cookie attached by Chrome). A play destination with
+an empty `apiKey` means "use my sign-in"; the panel's picker adds such
+plays directly (`ADD_PLAY_DESTINATION`). API keys remain an Advanced option.
+The side panel is enabled per tab only on LinkedIn URLs
+(`chrome.sidePanel.setOptions`). The Deepline web app may send `ping`,
+`get_auth_state` and `open_side_panel` through `externally_connectable`
+(origin re-validated, every message logged).
+
+### 4.2h Telemetry, error reports, flags
+
+`shared/telemetry.ts`: Segment-shaped `track` events (extension, version,
+user agent, time zone, anonymous id, Deepline user/org id) sent to Segment
+only when `SEGMENT_WRITE_KEY` was compiled in, always recorded in the local
+history as `telemetry.event`; uncaught errors from the worker, panel and
+settings page posted to Deepline's `POST /api/v2/cli/report-failure` when a
+session or key exists; feature flags (`intercept`, `session_auth`,
+`search_import`, `telemetry`) fetched from `<base>/api/v2/extension/flags`
+with local defaults. Properties are scrubbed of secrets and people before
+leaving. Gated by Settings `telemetry`.
+
 ### 4.2d LinkedIn's 2026 layout (verified live on 2026-09-03)
 
 LinkedIn's profile and people-search pages now render with hashed class
@@ -380,9 +432,12 @@ step.
 - The receiver can verify authenticity (HMAC), freshness (timestamp within
   300 s), and uniqueness (event id) before touching a database. The bundled
   receiver does all three and writes with parameterized SQL only.
-- Minimal permissions: `storage`, `alarms`, `sidePanel`, `tabs` (to follow
-  the active LinkedIn tab and relay panel actions to it), LinkedIn hosts, and
-  one optional host per destination granted at save time.
+- Permissions: `storage`, `alarms`, `sidePanel`, `tabs` (to follow the
+  active LinkedIn tab and relay panel actions to it), `cookies` (Deepline
+  sign-in state, scoped by host permission to `code.deepline.com`), LinkedIn
+  hosts, `code.deepline.com`, and one optional host per destination granted
+  at save time. No `<all_urls>`, no `scripting`. `docs/RISK-REVIEW.md`
+  compares this surface with Frontier's line by line.
 - The API key is the credential for play runs; it is blanked in everything a
   content script or the side panel can read, and never logged.
 - No third-party scripts, fonts, or network calls. The MAIN-world helper

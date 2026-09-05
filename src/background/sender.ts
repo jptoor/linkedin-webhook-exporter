@@ -37,7 +37,8 @@ export function buildPlayHeaders(dest: PlayDestination, eventId: string, version
   return {
     "Content-Type": "application/json",
     Accept: "application/json",
-    Authorization: `Bearer ${dest.apiKey}`,
+    // Empty apiKey = the rep's Deepline sign-in: the session cookie is the credential.
+    ...(dest.apiKey ? { Authorization: `Bearer ${dest.apiKey}` } : {}),
     [EVENT_ID_HEADER]: eventId,
     [VERSION_HEADER]: version,
     "Idempotency-Key": dedupeKey,
@@ -45,12 +46,12 @@ export function buildPlayHeaders(dest: PlayDestination, eventId: string, version
   };
 }
 
-async function post(url: string, headers: Record<string, string>, body: string, opts: SendOptions): Promise<SendResult> {
+async function post(url: string, headers: Record<string, string>, body: string, opts: SendOptions, credentials: RequestCredentials = "omit"): Promise<SendResult> {
   const fetchImpl = opts.fetchImpl ?? fetch;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 15_000);
   try {
-    const res = await fetchImpl(url, { method: "POST", headers, body, signal: ctrl.signal, credentials: "omit", redirect: "error" });
+    const res = await fetchImpl(url, { method: "POST", headers, body, signal: ctrl.signal, credentials, redirect: "error" });
     const cls = classifyStatus(res.status);
     const txt = await res.text().catch(() => "");
     let runId: string | null = null;
@@ -82,7 +83,7 @@ export async function sendBody(dest: Destination, body: string, eventId: string,
     const headers = await buildHeaders(dest, body, eventId, opts.version, nowSec, opts.dedupeKey ?? eventId);
     return post(dest.url, headers, body, opts);
   }
-  return post(runEndpoint(dest.baseUrl), buildPlayHeaders(dest, eventId, opts.version, opts.dedupeKey ?? eventId), body, opts);
+  return post(runEndpoint(dest.baseUrl), buildPlayHeaders(dest, eventId, opts.version, opts.dedupeKey ?? eventId), body, opts, dest.apiKey ? "omit" : "include");
 }
 
 /** Serialize a play run request. Stored on the queue item so a retry sends

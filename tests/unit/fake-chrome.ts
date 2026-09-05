@@ -27,7 +27,8 @@ export function makeFakeChrome() {
   const tabMessages: Array<{ tabId: number; msg: unknown }> = [];
   const broadcasts: unknown[] = [];
   const chrome = {
-    runtime: { id: "ext-id", onMessage: on("message"), onStartup: on("startup"), onInstalled: on("installed"), getURL: (p: string) => `chrome-extension://ext-id/${p}`, sendMessage: async (m: unknown) => void broadcasts.push(m) },
+    runtime: { id: "ext-id", onMessage: on("message"), onMessageExternal: on("messageExternal"), onStartup: on("startup"), onInstalled: on("installed"), getURL: (p: string) => `chrome-extension://ext-id/${p}`, sendMessage: async (m: unknown) => void broadcasts.push(m) },
+    cookies: { get: async () => null, onChanged: on("cookieChanged") },
     storage: { local: area(store), session: area(sessionStore) },
     alarms: { create: async (name: string, info: unknown) => void alarms.set(name, info), clear: async (name: string) => alarms.delete(name), onAlarm: on("alarm") },
     tabs: {
@@ -42,7 +43,7 @@ export function makeFakeChrome() {
     },
     commands: { onCommand: on("command") },
     permissions: { contains: async () => true, request: async () => true },
-    sidePanel: { setPanelBehavior: async () => undefined, open: async () => undefined }
+    sidePanel: { setPanelBehavior: async () => undefined, open: async () => undefined, setOptions: async () => undefined }
   };
   return { chrome, store, sessionStore, listeners, alarms, tabs, tabMessages, broadcasts };
 }

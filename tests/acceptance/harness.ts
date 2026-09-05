@@ -89,6 +89,10 @@ export class MockDeepline {
   server!: Server;
   baseUrl = "";
   apiKey = "dl_test_key";
+  /** When set, requests carrying this better-auth session cookie are signed in. */
+  sessionCookie: string | null = null;
+  sessionCalls: Array<{ cookie: string; authorization: string | null }> = [];
+  failures: Array<Record<string, unknown>> = [];
   runs: ReceivedRequest[] = [];
   lists = 0;
   failNext: number[] = [];
@@ -103,7 +107,19 @@ export class MockDeepline {
     this.server = createServer(async (req, res) => {
       const { raw, headers } = await collect(req);
       const url = new URL(req.url ?? "/", "http://x");
-      if (headers.authorization !== `Bearer ${this.apiKey}`) return res.writeHead(401, { "content-type": "application/json" }).end('{"error":"unauthorized"}');
+      const cookie = headers.cookie ?? "";
+      const sessionOk = this.sessionCookie != null && cookie.includes(`better-auth.session_token=${this.sessionCookie}`);
+      if (req.method === "GET" && url.pathname === "/api/v2/auth/session") {
+        this.sessionCalls.push({ cookie, authorization: headers.authorization ?? null });
+        return res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ session: sessionOk ? { user: { id: "u_1", email: "rep@acme.com", name: "Rep" }, activeOrgId: "org_1" } : null }));
+      }
+      if (req.method === "POST" && url.pathname === "/api/v2/cli/report-failure") {
+        this.failures.push(JSON.parse(raw || "{}"));
+        return res.writeHead(200, { "content-type": "application/json" }).end("{}");
+      }
+      if (url.pathname === "/api/v2/extension/flags") return res.writeHead(404).end("{}");
+      const bearerOk = headers.authorization === `Bearer ${this.apiKey}`;
+      if (!bearerOk && !sessionOk) return res.writeHead(401, { "content-type": "application/json" }).end('{"error":"unauthorized"}');
       if (req.method === "GET" && url.pathname === "/api/v2/plays") {
         this.lists++;
         const origin = url.searchParams.get("origin");
@@ -143,6 +159,18 @@ export const PAGED_TOTAL = GEN_TOTAL;
 export const PAGED_PAGES = GEN_PAGES;
 const SAMPLES = resolve(__dirname, "../../samples");
 
+/** What LinkedIn's sales-api returns for the three fixture rows: exact names,
+ *  role, company, region, degree and the public (flagship) profile URL that
+ *  the DOM never renders. */
+export const SALES_API_RESPONSE = {
+  paging: { count: 25, start: 0, total: 4321 },
+  elements: [
+    { entityUrn: "urn:li:fs_salesProfile:(ACwAAAabc123,NAME_SEARCH,xyz1)", firstName: "Alice", lastName: "Nguyen", fullName: "Alice Nguyen", geoRegion: "London, England, United Kingdom", degree: 2, flagshipProfileUrl: "https://www.linkedin.com/in/alice-nguyen-revops", currentPositions: [{ title: "Head of Revenue Operations", companyName: "Initech", companyUrn: "urn:li:fs_salesCompany:998877", current: true }] },
+    { entityUrn: "urn:li:fs_salesProfile:(ACwAAAdef456,NAME_SEARCH,xyz2)", firstName: "Bob", lastName: "Okafor", fullName: "Bob Okafor", geoRegion: "Lagos, Nigeria", degree: 3, flagshipProfileUrl: "https://www.linkedin.com/in/bob-okafor-cro", currentPositions: [{ title: "Chief Revenue Officer", companyName: "Umbrella Group", companyUrn: "urn:li:fs_salesCompany:12345", current: true }] },
+    { entityUrn: "urn:li:fs_salesProfile:(ACwAAAghi789,NAME_SEARCH,xyz3)", firstName: "Carla", lastName: "Mendes", fullName: "Carla Mendes", geoRegion: "Lisbon, Portugal", degree: 2, currentPositions: [{ title: "VP Sales", companyName: "Globex", current: true }] }
+  ]
+};
+
 export class FixtureSite {
   server!: Server;
   origin = "";
@@ -165,6 +193,16 @@ export class FixtureSite {
       }
       if (/^\/sales\/search\/people/.test(path) && u.searchParams.get("query") === "appended") {
         return res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(appendedSalesNav(Number(u.searchParams.get("page") ?? "1")));
+      }
+      // A Sales Navigator page whose own script calls the sales-api, plus the API itself.
+      if (/^\/sales\/search\/people/.test(path) && u.searchParams.get("query") === "api") {
+        return res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(readFileSync(resolve(FIXTURES, "salesnav-search-api.html")));
+      }
+      if (path === "/sales-api/salesApiLeadSearch") {
+        return res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(SALES_API_RESPONSE));
+      }
+      if (path === "/voyager/api/graphql") {
+        return res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ included: [] }));
       }
       if (/^\/sales\/search\/people/.test(path) && u.searchParams.get("query") === "delayed") {
         return res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(delayedSalesNav(Number(u.searchParams.get("page") ?? "1")));

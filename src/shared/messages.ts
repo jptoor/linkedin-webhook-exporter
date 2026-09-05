@@ -32,7 +32,12 @@ export type ContentToBackground =
   | { type: "RETRY_NOW" }
   | { type: "CLEAR_QUEUE"; status?: "sent" | "failed" | "all" }
   | { type: "TEST_DESTINATION"; destination?: Destination; destinationId?: string }
-  | { type: "LIST_PLAYS"; baseUrl: string; apiKey: string }
+  | { type: "LIST_PLAYS"; baseUrl?: string; apiKey?: string | null }
+  | { type: "ADD_PLAY_DESTINATION"; playKey: string; playName: string; inputSchema: Record<string, unknown> | null; activate?: boolean }
+  | { type: "GET_AUTH"; refresh?: boolean }
+  | { type: "PANEL_ERROR"; message: string; stack?: string | null }
+  | { type: "SIGN_IN" }
+  | { type: "INTERCEPT_STATS"; responses: number; people: number; total: number | null; pageType: PageType | null }
   | { type: "SEARCH_CAPTURE"; url: string; pageType: PageType; totalHint: number | null; limit?: number; searchName?: string | null; savedSearchId?: string | null; force?: boolean; destinationId?: string }
   | { type: "BASKET_ADD"; leads: LeadRecord[]; pageType: PageType; pageUrl: string; pageTitle?: string }
   | { type: "BASKET_REMOVE"; keys: string[] }
@@ -55,7 +60,7 @@ export type BackgroundToContent =
   | { type: "BASKET_CHANGED"; keys: string[] };
 
 /** Background -> side panel broadcast. */
-export type BackgroundToPanel = { type: "CONTEXT_CHANGED"; tabId: number; context: PageContext } | { type: "BASKET_CHANGED"; keys: string[] } | { type: "STATE_CHANGED" };
+export type BackgroundToPanel = { type: "CONTEXT_CHANGED"; tabId: number; context: PageContext } | { type: "BASKET_CHANGED"; keys: string[] } | { type: "STATE_CHANGED" } | { type: "AUTH_CHANGED"; auth: AuthResponse };
 
 export interface CaptureResponse {
   ok: boolean;
@@ -95,6 +100,15 @@ export interface StateResponse {
 export interface ListPlaysResponse {
   ok: boolean;
   plays: PlaySummary[];
+  error: string | null;
+}
+
+export interface AuthResponse {
+  signedIn: boolean;
+  baseUrl: string;
+  email: string | null;
+  name: string | null;
+  orgId: string | null;
   error: string | null;
 }
 

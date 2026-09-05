@@ -1,4 +1,5 @@
 import type { BackgroundToContent, BasketResponse, CaptureResponse, ContentSettingsResponse, PageContext } from "../shared/messages";
+import { ApiIndex, enrichLead } from "../shared/linkedin-api";
 import { dedupeKey } from "../shared/normalize";
 import { isSensitiveParam, savedSearchIdFrom, searchName } from "../shared/search";
 import type { LeadRecord, PageType } from "../shared/types";
@@ -52,6 +53,47 @@ function destinationLabel(s: ContentSettingsResponse, count = 0): string {
   return d ? `Push to ${d}` : "Push";
 }
 
+/* ---------- LinkedIn API responses observed by the page bridge ---------- */
+
+/** People seen in the responses the page loaded (Sales Navigator sales-api,
+ *  Voyager). Rebuilt per route so a new search starts clean. */
+let apiIndex = new ApiIndex();
+let interceptEnabled = true;
+let lastStatsAt = 0;
+const onApiData: Array<() => void> = [];
+
+function ingestApi(url: string, text: string): void {
+  if (!interceptEnabled) return;
+  const parsed = apiIndex.ingest(url, text);
+  if (parsed.people.length || parsed.meta.total != null) {
+    for (const fn of onApiData) fn();
+    const now = Date.now();
+    if (now - lastStatsAt > 5000) {
+      lastStatsAt = now;
+      void send({ type: "INTERCEPT_STATS", responses: apiIndex.responses, people: apiIndex.people, total: apiIndex.total, pageType: detectPageType(location.pathname) }).catch(() => undefined);
+    }
+  }
+}
+
+/** DOM parse first; the API fills what the DOM could not render. */
+function enrich(lead: LeadRecord | null): LeadRecord | null {
+  return lead ? enrichLead(lead, apiIndex.lookup(lead)) : lead;
+}
+
+window.addEventListener("message", (e) => {
+  if (e.source !== window || e.origin !== location.origin || !e.data || typeof e.data !== "object") return;
+  const d = e.data as Record<string, unknown>;
+  if (d.channel !== "LWE_BRIDGE") return;
+  if (d.event === "INTERCEPTED_DATA" && typeof d.url === "string" && typeof d.responseText === "string") ingestApi(d.url, d.responseText);
+  else if (d.event === "SHARE_LINK" && typeof d.url === "string") void send({ type: "SHARE_LINK", url: d.url }).catch(() => undefined);
+});
+// Tell the bridge we are listening so responses that landed before document_idle are replayed.
+try {
+  window.postMessage({ channel: "LWE_BRIDGE", event: "CONTENT_READY" }, location.origin);
+} catch {
+  /* ignore */
+}
+
 /* ---------- page context reporting (feeds the side panel) ---------- */
 
 let currentContext: PageContext | null = null;
@@ -61,6 +103,7 @@ function reportContext(ctx: PageContext): void {
 }
 
 function detectTotalHint(): number | null {
+  if (apiIndex.total != null) return apiIndex.total;
   const el = document.querySelector<HTMLElement>('[data-lwe="results-count"], .search-results__total, h2.t-14, .artdeco-pagination__page-state');
   const m = el?.textContent?.replace(/[,.\s\u00a0\u202f]/g, "").match(/(\d{1,7})\s*(results?|leads?|people)/i) ?? el?.textContent?.match(/(\d{1,7})/);
   return m ? Number(m[1]) : null;
@@ -83,7 +126,9 @@ async function setupSinglePage(pageType: PageType): Promise<Mount> {
   const panel = mountPanel(document, "Deepline", "Loading…", "Select instead", "Push again");
   panel.primary.disabled = true;
   let alive = true;
-  const light = () => parsePage(document, location.href, { includeExperience: false, includeEducation: false, includeAbout: false }).leads[0] ?? null;
+  const light = () => enrich(parsePage(document, location.href, { includeExperience: false, includeEducation: false, includeAbout: false }).leads[0] ?? null);
+  const onApi = () => reportContext(context());
+  onApiData.push(onApi);
   const context = (): PageContext => {
     const lead = light();
     return { pageType, url: location.href, title: document.title, lead: lead?.full_name ? lead : null, rowsOnPage: 0, selectedOnPage: 0, savedSearchId: null, shareUrl: null, searchName: null, totalHint: null };
@@ -95,7 +140,7 @@ async function setupSinglePage(pageType: PageType): Promise<Mount> {
     const settings = await getSettings();
     if (!alive) return;
     const { leads } = parsePage(document, location.href, { includeExperience: settings.includeExperience, includeEducation: settings.includeEducation, includeAbout: settings.includeAbout });
-    const lead = leads[0];
+    const lead = enrich(leads[0] ?? null);
     if (!lead || !lead.full_name) {
       panel.setStatus("Could not read a name on this page yet. Scroll a little and try again.", "err");
       panel.primary.disabled = false;
@@ -120,6 +165,7 @@ async function setupSinglePage(pageType: PageType): Promise<Mount> {
   panel.openPanel.addEventListener("click", () => void send({ type: "OPEN_SIDE_PANEL" }));
   const relabel = () => void getSettings().then((s) => {
     if (!alive) return;
+    interceptEnabled = s.intercept;
     panel.primary.textContent = destinationLabel(s);
     panel.primary.disabled = false;
   });
@@ -140,6 +186,7 @@ async function setupSinglePage(pageType: PageType): Promise<Mount> {
     dispose: () => {
       alive = false;
       chrome.storage.onChanged.removeListener(onChange);
+      onApiData.splice(onApiData.indexOf(onApi), 1);
       panel.dispose();
     },
     sendCurrent: () => void doSend(false),
@@ -163,7 +210,7 @@ interface RowState {
 }
 
 function parseRow(row: HTMLElement, pageType: PageType, now: string): LeadRecord | null {
-  return pageType === "people_search" ? parsePeopleSearchRow(row, now) : parseSalesNavRow(row, now);
+  return enrich(pageType === "people_search" ? parsePeopleSearchRow(row, now) : parseSalesNavRow(row, now));
 }
 
 function nativeCheckbox(row: HTMLElement): HTMLInputElement | null {
@@ -175,6 +222,8 @@ async function setupListPage(pageType: PageType): Promise<Mount> {
   const panel = mountPanel(document, "Deepline", "Loading…", "Add all on page", "Import search");
   const rows = new Map<HTMLElement, RowState>();
   let basketKeys = new Set<string>();
+  /** Keys whose basket toggle is in flight: do not overwrite their native checkbox meanwhile. */
+  const pending = new Set<string>();
   let alive = true;
   const disposers: Array<() => void> = [() => (alive = false), () => panel.dispose()];
   const savedSearchId = pageType === "salesnav_search" ? savedSearchIdFrom(location.href) : null;
@@ -183,6 +232,7 @@ async function setupListPage(pageType: PageType): Promise<Mount> {
   const relabel = () => void getSettings().then((s) => {
     if (!alive) return;
     settingsCache = s;
+    interceptEnabled = s.intercept;
     refresh();
   });
   const onSettingsChange = (changes: Record<string, unknown>) => {
@@ -210,7 +260,7 @@ async function setupListPage(pageType: PageType): Promise<Mount> {
       const picked = basketKeys.has(r.key);
       if (picked) sel++;
       setPicked(r.pick, picked);
-      if (r.native && r.native.checked !== picked && !r.native.disabled) {
+      if (r.native && !pending.has(r.key) && r.native.checked !== picked && !r.native.disabled) {
         // Mirror our state onto LinkedIn's checkbox without firing its handlers twice.
         r.native.checked = picked;
       }
@@ -223,16 +273,23 @@ async function setupListPage(pageType: PageType): Promise<Mount> {
     reportContext(context());
   };
 
+  /** The freshest parse of a row (API data may have landed since decoration). */
+  const current = (st: RowState): LeadRecord => parseRow(st.el, pageType, new Date().toISOString()) ?? st.lead;
   const toggle = async (st: RowState, on: boolean) => {
-    if (on) {
-      const r = await send<BasketResponse & { added: number; full: boolean }>({ type: "BASKET_ADD", leads: [st.lead], pageType, pageUrl: location.href, pageTitle: document.title });
-      if (!alive) return;
-      if (r.full) panel.setStatus("You have 500 people selected, the maximum. Push or clear them first.", "warn");
-      basketKeys = new Set(r.items.map((i) => i.key));
-    } else {
-      const r = await send<BasketResponse>({ type: "BASKET_REMOVE", keys: [st.key] });
-      if (!alive) return;
-      basketKeys = new Set(r.items.map((i) => i.key));
+    pending.add(st.key);
+    try {
+      if (on) {
+        const r = await send<BasketResponse & { added: number; full: boolean }>({ type: "BASKET_ADD", leads: [current(st)], pageType, pageUrl: location.href, pageTitle: document.title });
+        if (!alive) return;
+        if (r.full) panel.setStatus("You have 500 people selected, the maximum. Push or clear them first.", "warn");
+        basketKeys = new Set(r.items.map((i) => i.key));
+      } else {
+        const r = await send<BasketResponse>({ type: "BASKET_REMOVE", keys: [st.key] });
+        if (!alive) return;
+        basketKeys = new Set(r.items.map((i) => i.key));
+      }
+    } finally {
+      pending.delete(st.key);
     }
     refresh();
   };
@@ -305,7 +362,7 @@ async function setupListPage(pageType: PageType): Promise<Mount> {
       panel.secondary.textContent = "Add all on page";
       return refresh();
     }
-    const r = await send<BasketResponse & { added: number; full: boolean }>({ type: "BASKET_ADD", leads: unpicked.map((x) => x.lead), pageType, pageUrl: location.href, pageTitle: document.title });
+    const r = await send<BasketResponse & { added: number; full: boolean }>({ type: "BASKET_ADD", leads: unpicked.map(current), pageType, pageUrl: location.href, pageTitle: document.title });
     if (!alive) return;
     basketKeys = new Set(r.items.map((i) => i.key));
     panel.secondary.textContent = "Remove all on page";
@@ -317,7 +374,7 @@ async function setupListPage(pageType: PageType): Promise<Mount> {
   const addSelected = async (): Promise<void> => {
     const picked = Array.from(rows.values()).filter((r) => r.native?.checked && !basketKeys.has(r.key));
     if (!picked.length) return addAll();
-    const r = await send<BasketResponse & { added: number; full: boolean }>({ type: "BASKET_ADD", leads: picked.map((x) => x.lead), pageType, pageUrl: location.href, pageTitle: document.title });
+    const r = await send<BasketResponse & { added: number; full: boolean }>({ type: "BASKET_ADD", leads: picked.map(current), pageType, pageUrl: location.href, pageTitle: document.title });
     if (!alive) return;
     basketKeys = new Set(r.items.map((i) => i.key));
     refresh();
@@ -379,6 +436,17 @@ async function setupListPage(pageType: PageType): Promise<Mount> {
   const b = await send<BasketResponse>({ type: "BASKET_GET" }).catch(() => ({ items: [] as BasketResponse["items"], count: 0, pages: 0 }));
   if (!alive) return { dispose: () => disposers.splice(0).forEach((d) => d()) };
   basketKeys = new Set(b.items.map((i) => i.key));
+  // API data may land before or after rows were decorated: re-parse in place either way.
+  const onApi = () => {
+    const now = new Date().toISOString();
+    for (const st of rows.values()) {
+      const fresh = parseRow(st.el, pageType, now);
+      if (fresh) st.lead = fresh;
+    }
+    refresh();
+  };
+  onApiData.push(onApi);
+  disposers.push(() => onApiData.splice(onApiData.indexOf(onApi), 1));
   relabel();
   await decorate();
   // LinkedIn renders lists incrementally and on scroll; observe the results
@@ -434,12 +502,6 @@ chrome.runtime.onMessage.addListener((m: BackgroundToContent, _s, sendResponse) 
   return false;
 });
 
-// Share links copied by Sales Navigator's "Share search" (see main-world.ts).
-window.addEventListener("message", (e) => {
-  if (e.source !== window || e.origin !== location.origin || !e.data || typeof e.data !== "object") return;
-  const url = (e.data as Record<string, unknown>).__lwe_share_link__;
-  if (typeof url === "string") void send({ type: "SHARE_LINK", url }).catch(() => undefined);
-});
 
 /* ---------- navigation controller ---------- */
 
@@ -463,6 +525,7 @@ function boot(): void {
   const run = async () => {
     active?.dispose();
     active = null;
+    apiIndex = new ApiIndex();
     const pageType = detectPageType(location.pathname);
     if (!pageType) {
       reportContext({ pageType: null, url: location.href, title: document.title, lead: null, rowsOnPage: 0, selectedOnPage: 0, savedSearchId: null, shareUrl: null, searchName: null, totalHint: null });

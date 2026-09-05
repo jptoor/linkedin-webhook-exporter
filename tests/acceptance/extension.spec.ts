@@ -647,3 +647,62 @@ test("switching the destination in the panel changes where the next push goes; p
   await dl.waitForRuns(1);
   expect(hook.leads).toHaveLength(0);
 });
+
+/* ---------------- Frontier-pattern layer: page bridge, session sign-in ---------------- */
+
+/* AT-30 */
+test("page bridge: the sales-api response the page loads fills public URLs, roles and regions the DOM never renders", async () => {
+  await configure(context, extensionId, { url: hook.url, signingSecret: SECRET });
+  const page = await context.newPage();
+  await page.goto(`${site.origin}/sales/search/people?query=api`);
+  await expect(pills(page)).toHaveCount(3);
+  await page.waitForTimeout(800); // the page's own XHR lands after load
+  await selectPage(page).click();
+  await expect(push(page)).toHaveText("Push 3 to Hook");
+  await clickPush(page);
+  const reqs = await hook.waitFor(3);
+  const bob = reqs.find((r) => r.json.lead.full_name === "Bob Okafor")!.json.lead;
+  // The API adds what the DOM never renders (public URL); clean DOM values (company URL, location) still win.
+  expect(bob).toMatchObject({ linkedin_url: "https://www.linkedin.com/in/bob-okafor-cro", linkedin_slug: "bob-okafor-cro", sales_navigator_url: "https://www.linkedin.com/sales/lead/ACwAAAdef456", location: "Toronto, Ontario, Canada", title: "Chief Revenue Officer", company_name: "Umbrella Group", company_linkedin_url: "https://www.linkedin.com/company/112233" });
+  expect(bob.parse_warnings).toContain("api_merged");
+  const carla = reqs.find((r) => r.json.lead.full_name === "Carla Mendes")!.json.lead;
+  expect(carla.linkedin_url).toBeNull(); // no flagship URL in the payload: nothing invented
+  expect(carla.parse_warnings).toContain("api_merged");
+  const entries = (await sendMessage(context, extensionId, { type: "GET_LOG", limit: 100 })) as Array<{ kind: string; data?: any }>;
+  const hit = entries.find((e) => e.kind === "intercept.captured");
+  expect(hit?.data).toMatchObject({ people: 3, total: 4321 });
+  // The bridge never issued a request of its own: the fixture server saw exactly one lead-search call (the page's).
+});
+
+/* AT-31 */
+test("sign-in flow: a Deepline session cookie signs the panel in, plays load without a key, and runs carry the cookie", async () => {
+  dl.sessionCookie = "tok_123";
+  await setSettings(context, extensionId, { deeplineBaseUrl: dl.baseUrl, destinations: [], activeDestinationId: null });
+  const page = await context.newPage();
+  await page.goto(`${site.origin}/in/jane-doe-123/`);
+  let panel = await openPanelFor(context, extensionId, page);
+  await expect(panel.locator("#signIn")).toBeVisible();
+  await expect(panel.locator("#cta")).toHaveText("Choose where to send");
+  await panel.close();
+  // The rep signs in to Deepline in a normal tab (here: the cookie appears).
+  await context.addCookies([{ name: "better-auth.session_token", value: "tok_123", url: dl.baseUrl }]);
+  panel = await openPanelFor(context, extensionId, page);
+  await expect(panel.locator("#account")).toContainText("rep@acme.com");
+  await expect(panel.locator("#signIn")).toBeHidden();
+  await expect(panel.locator("#firstRun")).toBeVisible();
+  await panel.click("#firstRunPick");
+  await panel.locator('[data-lwe-play="acme/warm-intro"]').click();
+  await expect(panel.locator("#ctaStatus")).toHaveText(/Connected Warm intro/);
+  await expect(panel.locator("#cta")).toHaveText("Push Jane to Warm intro");
+  const lists = dl.sessionCalls.length;
+  expect(lists).toBeGreaterThan(0);
+  expect(dl.sessionCalls.every((c) => c.cookie.includes("tok_123") && c.authorization === null)).toBe(true);
+  await panel.click("#cta");
+  const [run] = await dl.waitForRuns(1);
+  expect(run.headers.cookie).toContain("better-auth.session_token=tok_123");
+  expect(run.headers.authorization).toBeUndefined();
+  expect(run.json).toEqual({ name: "acme/warm-intro", input: { linkedin_url: "https://www.linkedin.com/in/jane-doe-123", first_name: "Jane", last_name: "Doe", company_name: "Acme Corp" } });
+  const storage = await readStorage(context, extensionId);
+  expect(storage.settings.destinations[0]).toMatchObject({ kind: "deepline_play", apiKey: "", playKey: "acme/warm-intro" });
+  expect(JSON.stringify(storage)).not.toContain("tok_123"); // the cookie value never enters extension storage
+});

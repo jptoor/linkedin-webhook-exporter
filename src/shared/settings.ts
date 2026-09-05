@@ -147,8 +147,19 @@ export function sanitizeSettings(input: unknown): Settings {
     includeExperience: bool(s.includeExperience, true),
     includeEducation: bool(s.includeEducation, true),
     includeAbout: bool(s.includeAbout, true),
-    searchDefaultLimit: clampInt(s.searchDefaultLimit, 1, LIMITS.searchLimitMax, DEFAULT_SETTINGS.searchDefaultLimit)
+    searchDefaultLimit: clampInt(s.searchDefaultLimit, 1, LIMITS.searchLimitMax, DEFAULT_SETTINGS.searchDefaultLimit),
+    deeplineBaseUrl: safeBase(s.deeplineBaseUrl),
+    telemetry: bool(s.telemetry, DEFAULT_SETTINGS.telemetry),
+    intercept: bool(s.intercept, DEFAULT_SETTINGS.intercept)
   };
+}
+
+function safeBase(v: unknown): string {
+  try {
+    return normalizeBaseUrl(str(v, 2048));
+  } catch {
+    return DEFAULT_SETTINGS.deeplineBaseUrl;
+  }
 }
 
 export async function getSettings(): Promise<Settings> {
@@ -183,7 +194,7 @@ export function activeDestination(s: Settings): Destination | null {
 
 export function toContentSettings(s: Settings): ContentSettings {
   const d = activeDestination(s);
-  return { includeExperience: s.includeExperience, includeEducation: s.includeEducation, includeAbout: s.includeAbout, dedupe: s.dedupe, searchDefaultLimit: s.searchDefaultLimit, hasDestination: !!d, destinationName: d?.name ?? null, destinationKind: d?.kind ?? null };
+  return { includeExperience: s.includeExperience, includeEducation: s.includeEducation, includeAbout: s.includeAbout, dedupe: s.dedupe, searchDefaultLimit: s.searchDefaultLimit, intercept: s.intercept, hasDestination: !!d, destinationName: d?.name ?? null, destinationKind: d?.kind ?? null };
 }
 
 /** Destinations with secrets blanked, for extension pages that only need to

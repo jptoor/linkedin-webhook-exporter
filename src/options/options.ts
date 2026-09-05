@@ -1,5 +1,5 @@
 import { DEFAULT_BASE_URL, summarizePlayInput, type PlaySummary } from "../shared/deepline";
-import type { ListPlaysResponse } from "../shared/messages";
+import type { AuthResponse, ListPlaysResponse } from "../shared/messages";
 import { getSettings, newId, originPattern, saveSettings, validateHeader, validateWebhookUrl } from "../shared/settings";
 import type { Destination, PlayDestination, Settings, WebhookDestination } from "../shared/types";
 
@@ -118,8 +118,8 @@ function readDest(): { dest: Destination | null; reason: string | null } {
   if (!editing) return { dest: null, reason: "Nothing to save" };
   if (editing.kind === "deepline_play") {
     const apiKey = val("apiKey").trim();
-    if (!apiKey) return { dest: null, reason: "Paste your Deepline API key." };
-    if (!pickedPlay) return { dest: null, reason: "Load your plays and pick one." };
+    if (!apiKey && !auth?.signedIn) return { dest: null, reason: "Sign in to Deepline first (or paste an API key under Advanced)." };
+    if (!pickedPlay) return { dest: null, reason: "Find your plays and pick one." };
     const dest: PlayDestination = { id: editing.id, kind: "deepline_play", name: val("destName").trim() || pickedPlay.displayName, favorite: editing.favorite, baseUrl: val("baseUrl").trim() || DEFAULT_BASE_URL, apiKey, playKey: pickedPlay.playKey, playName: pickedPlay.displayName, input: pickedPlay.input };
     try {
       new URL(dest.baseUrl);
@@ -160,14 +160,23 @@ async function ensureHostPermission(url: string): Promise<boolean> {
   }
 }
 
+let auth: AuthResponse | null = null;
+async function refreshAuth(refresh = false) {
+  auth = await msg<AuthResponse>({ type: "GET_AUTH", refresh });
+  const el = document.getElementById("authState");
+  if (el) el.textContent = auth.signedIn ? `Signed in to Deepline as ${auth.email ?? auth.name ?? "you"}.` : "Not signed in to Deepline.";
+  const btn = document.getElementById("signInBtn");
+  if (btn) btn.hidden = !!auth.signedIn;
+}
+
 async function loadPlays() {
   const apiKey = val("apiKey").trim();
-  if (!apiKey) return setStatus($("playsStatus"), "Paste your API key first.", "err");
+  if (!apiKey && !auth?.signedIn) return setStatus($("playsStatus"), "Sign in to Deepline first, or paste an API key under Advanced.", "err");
   const baseUrl = val("baseUrl").trim() || DEFAULT_BASE_URL;
   if (!(await ensureHostPermission(baseUrl))) return setStatus($("playsStatus"), "Chrome needs permission to reach that address.", "err");
   setStatus($("playsStatus"), "Loading…");
-  const r = await msg<ListPlaysResponse>({ type: "LIST_PLAYS", baseUrl, apiKey });
-  if (!r.ok) return setStatus($("playsStatus"), r.error === "Deepline rejected the API key" ? "That API key was rejected." : `Could not load plays: ${r.error}`, "err");
+  const r = await msg<ListPlaysResponse>({ type: "LIST_PLAYS", baseUrl, apiKey: apiKey || null });
+  if (!r.ok) return setStatus($("playsStatus"), r.error === "Deepline rejected the API key" ? "That API key was rejected." : r.error === "Not signed in to Deepline" ? "Your Deepline sign-in expired. Sign in again." : `Could not load plays: ${r.error}`, "err");
   plays = r.plays;
   setStatus($("playsStatus"), plays.length ? `${plays.length} plays found` : "No plays found in this org.", plays.length ? "ok" : "err");
   $("playsHint").hidden = !plays.length;
@@ -205,6 +214,13 @@ function renderPlays() {
 }
 
 $("addDest").addEventListener("click", () => openEditor(undefined, "deepline_play"));
+$("signInBtn").addEventListener("click", () => void msg({ type: "SIGN_IN" }));
+chrome.runtime.onMessage.addListener((m: { type?: string; auth?: AuthResponse }) => {
+  if (m?.type === "AUTH_CHANGED" && m.auth) {
+    auth = m.auth;
+    void refreshAuth();
+  }
+});
 $("addWebhook").addEventListener("click", () => openEditor(undefined, "webhook"));
 $("kindPlay").addEventListener("click", () => setKind("deepline_play"));
 $("kindWebhook").addEventListener("click", () => setKind("webhook"));
@@ -241,6 +257,8 @@ function renderGeneral(s: Settings) {
   $<HTMLInputElement>("searchDefaultLimit").value = String(s.searchDefaultLimit);
   $<HTMLInputElement>("dedupeTtlDays").value = String(s.dedupeTtlDays);
   $<HTMLInputElement>("dedupe").checked = s.dedupe;
+  $<HTMLInputElement>("intercept").checked = s.intercept;
+  $<HTMLInputElement>("telemetry").checked = s.telemetry;
   $<HTMLInputElement>("includeExperience").checked = s.includeExperience;
   $<HTMLInputElement>("includeEducation").checked = s.includeEducation;
   $<HTMLInputElement>("includeAbout").checked = s.includeAbout;
@@ -266,6 +284,8 @@ $("save").addEventListener("click", async () => {
     searchDefaultLimit: Math.max(1, Number(val("searchDefaultLimit")) || 100),
     dedupeTtlDays: Math.max(1, Number(val("dedupeTtlDays")) || 30),
     dedupe: $<HTMLInputElement>("dedupe").checked,
+    intercept: $<HTMLInputElement>("intercept").checked,
+    telemetry: $<HTMLInputElement>("telemetry").checked,
     includeExperience: $<HTMLInputElement>("includeExperience").checked,
     includeEducation: $<HTMLInputElement>("includeEducation").checked,
     includeAbout: $<HTMLInputElement>("includeAbout").checked,
@@ -311,4 +331,6 @@ getSettings().then((s) => {
   if (location.hash === "#add") openEditor(undefined, "deepline_play");
   if (location.hash === "#log") document.getElementById("log")?.scrollIntoView();
 });
+void refreshAuth();
+window.addEventListener("error", (e) => void msg({ type: "PANEL_ERROR", message: String(e.message), stack: e.error instanceof Error ? e.error.stack : null }).catch(() => undefined));
 void renderLog();

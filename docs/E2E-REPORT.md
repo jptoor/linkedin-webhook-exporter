@@ -1,6 +1,6 @@
 # End-to-end run on sample pages
 
-Date: 2026-09-05T02:23:15.062Z  
+Date: 2026-09-05T03:54:19.914Z  
 Extension: test build loaded unpacked in Chromium 151.0.7922.34  
 Receiver: signed (LWE) webhook destination, admin-token reads, SQLite  
 
@@ -50,6 +50,7 @@ Receiver: signed (LWE) webhook destination, admin-token reads, SQLite
 {
   "send.ok": 35,
   "send.attempt": 35,
+  "telemetry.event": 11,
   "capture.queued": 9,
   "capture.requested": 10,
   "basket.sent": 4,
@@ -57,7 +58,8 @@ Receiver: signed (LWE) webhook destination, admin-token reads, SQLite
   "capture.duplicate": 2,
   "search.saved": 1,
   "settings.saved": 2,
-  "destination.test": 1
+  "destination.test": 1,
+  "auth.changed": 2
 }
 ```
 

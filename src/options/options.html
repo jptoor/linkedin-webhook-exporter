@@ -90,10 +90,12 @@
     </div>
 
     <div id="playFields">
-      <label for="apiKey">Deepline API key</label>
-      <input id="apiKey" type="password" autocomplete="off" placeholder="dl_…">
-      <div class="small muted">From your Deepline dashboard under API keys. Stored only in this browser.</div>
-      <details><summary>Advanced: self-hosted or local Deepline</summary>
+      <div id="authState" class="small muted" style="margin-top:8px">Checking your Deepline sign-in…</div>
+      <div class="actions" style="margin-top:8px"><button id="signInBtn" type="button">Sign in to Deepline</button><span class="small muted">Plays load from your own sign-in. Nothing to paste.</span></div>
+      <details><summary>Advanced: use an API key or a self-hosted Deepline</summary>
+        <label for="apiKey">Deepline API key (optional)</label>
+        <input id="apiKey" type="password" autocomplete="off" placeholder="dl_… (leave empty to use your sign-in)">
+        <div class="small muted">From your Deepline dashboard under API keys. Stored only in this browser.</div>
         <label for="baseUrl">Deepline address</label>
         <input id="baseUrl" type="url" value="https://code.deepline.com">
       </details>
@@ -156,6 +158,9 @@
     <div><label for="dedupeTtlDays">Remember pushed people for (days)</label><input id="dedupeTtlDays" type="number" min="1" max="365"></div>
   </div>
   <label class="check"><input id="dedupe" type="checkbox"> Skip people already pushed</label>
+  <label class="check"><input id="intercept" type="checkbox"> Use LinkedIn’s own page data to fill in details (public profile links, exact titles)</label>
+  <label class="check"><input id="telemetry" type="checkbox"> Send anonymous usage and error reports to Deepline</label>
+  <div class="small muted">Usage events never include people from LinkedIn. Error reports reach Deepline only while you are signed in or use an API key. See PRIVACY.md.</div>
   <div class="warn">These limits help you control volume; they do not make LinkedIn activity compliant or prevent account restrictions. LinkedIn restricts accounts that pull too many profiles too fast; the default is 100 a day. Search imports run on Deepline’s side and do not count here.</div>
 
   <details style="margin-top:22px"><summary>More options</summary>

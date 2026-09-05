@@ -1,13 +1,15 @@
 /** Side panel for reps: what you are looking at, where it goes, one button.
  *  All state comes from the worker; page actions are relayed to the content
  *  script of the active tab. Vocabulary: push, selected, search import. */
-import type { BackgroundToPanel, BasketResponse, CaptureResponse, PageContext, SearchCaptureResponse, StateResponse } from "../shared/messages";
+import { summarizePlayInput, type PlaySummary } from "../shared/deepline";
+import type { AuthResponse, BackgroundToPanel, BasketResponse, CaptureResponse, ListPlaysResponse, PageContext, SearchCaptureResponse, StateResponse } from "../shared/messages";
 import type { Destination, LeadRecord, QueueItem } from "../shared/types";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const msg = <T,>(m: unknown): Promise<T> => chrome.runtime.sendMessage(m) as Promise<T>;
 
 let state: StateResponse | null = null;
+let auth: AuthResponse | null = null;
 let basket: BasketResponse = { items: [], count: 0, pages: 0 };
 let context: PageContext | null = null;
 let activeTabId: number | null = null;
@@ -92,8 +94,81 @@ function renderDest() {
   const d = activeDest();
   const btn = $("destBtn");
   btn.classList.toggle("empty", !d);
-  $("destName").textContent = d ? d.name : state?.settings.destinations.length ? "Choose a play" : "Connect a play";
-  $("firstRun").hidden = !state || state.settings.destinations.length > 0;
+  $("destName").textContent = d ? d.name : "Choose a play";
+  const none = !!state && state.settings.destinations.length === 0;
+  const signedIn = !!auth?.signedIn;
+  $("signIn").hidden = !none || signedIn;
+  $("firstRun").hidden = !none || !signedIn;
+  $("account").textContent = signedIn ? `· ${auth?.email ?? auth?.name ?? "signed in"}` : "for LinkedIn";
+}
+
+/* ---------- Deepline plays from the rep's own sign-in ---------- */
+
+let sheetPlays: PlaySummary[] | null = null;
+async function renderSheetPlays(force = false) {
+  const box = $("sheetPlays");
+  if (!auth?.signedIn) {
+    box.hidden = true;
+    return;
+  }
+  box.hidden = false;
+  const ul = $("sheetPlayList");
+  const teach = (text: string) => {
+    ul.textContent = "";
+    const li = document.createElement("li");
+    li.className = "teach";
+    li.style.padding = "6px 8px";
+    li.textContent = text;
+    ul.appendChild(li);
+  };
+  if (!sheetPlays || force) {
+    teach("Loading your plays…");
+    const r = await msg<ListPlaysResponse>({ type: "LIST_PLAYS" });
+    if (!r.ok) {
+      sheetPlays = null;
+      teach(r.error?.includes("signed in") ? "Your Deepline sign-in expired. Sign in again." : `Could not load plays: ${r.error}`);
+      return;
+    }
+    sheetPlays = r.plays;
+  }
+  ul.textContent = "";
+  const q = sheetQuery.trim().toLowerCase();
+  const connected = new Set(state?.settings.destinations.map((d) => (d.kind === "deepline_play" ? d.playKey : "")) ?? []);
+  const items = sheetPlays.filter((p) => !connected.has(p.playKey) && (!q || p.displayName.toLowerCase().includes(q) || p.playKey.toLowerCase().includes(q))).sort((a, b) => (a.origin === b.origin ? a.displayName.localeCompare(b.displayName) : a.origin === "owned" ? -1 : 1));
+  if (!items.length) return teach(sheetPlays.length ? "All your plays are connected." : "No plays in this Deepline workspace yet.");
+  for (const p of items.slice(0, 50)) {
+    const li = document.createElement("li");
+    const pick = document.createElement("button");
+    pick.type = "button";
+    pick.className = "pick";
+    pick.setAttribute("data-lwe-play", p.playKey);
+    const t = document.createElement("span");
+    t.className = "t";
+    const n = document.createElement("span");
+    n.className = "n";
+    n.textContent = p.displayName;
+    const k = document.createElement("span");
+    k.className = "k";
+    k.textContent = `${p.origin === "prebuilt" ? "Deepline prebuilt · " : ""}${summarizePlayInput(p.input)}`;
+    t.append(n, k);
+    const kind = document.createElement("span");
+    kind.className = "kind";
+    kind.textContent = "Add";
+    pick.append(t, kind);
+    pick.addEventListener("click", async () => {
+      state = await msg<StateResponse>({ type: "ADD_PLAY_DESTINATION", playKey: p.playKey, playName: p.displayName, inputSchema: p.inputSchema, activate: true });
+      closeSheet();
+      renderAll();
+      ctaStatus(`Connected ${p.displayName}.`, "ok");
+    });
+    li.append(pick);
+    ul.appendChild(li);
+  }
+}
+
+async function refreshAuth(refresh = false) {
+  auth = await msg<AuthResponse>({ type: "GET_AUTH", refresh });
+  renderDest();
 }
 
 let sheetQuery = "";
@@ -161,6 +236,7 @@ function safeHost(u: string): string {
 }
 function openSheet() {
   renderSheet();
+  void renderSheetPlays();
   $("sheet").hidden = false;
   $<HTMLInputElement>("sheetSearch").focus();
 }
@@ -423,8 +499,26 @@ document.addEventListener("keydown", (e) => {
 $<HTMLInputElement>("sheetSearch").addEventListener("input", (e) => {
   sheetQuery = (e.target as HTMLInputElement).value;
   renderSheet();
+  void renderSheetPlays();
 });
-$("sheetAdd").addEventListener("click", () => chrome.runtime.openOptionsPage());
+$("sheetAdd").addEventListener("click", async () => {
+  if (!auth?.signedIn) {
+    await msg({ type: "SIGN_IN" });
+    return;
+  }
+  await renderSheetPlays(true);
+  $("sheetPlays").scrollIntoView({ block: "nearest" });
+});
+$("sheetSettings").addEventListener("click", () => chrome.runtime.openOptionsPage());
+$("signInBtn").addEventListener("click", async () => {
+  await msg({ type: "SIGN_IN" });
+  note($("signInNote"), "A Deepline tab opened. Sign in there; this panel updates by itself.", "info");
+});
+$("signInSettings").addEventListener("click", () => chrome.runtime.openOptionsPage());
+$("firstRunPick").addEventListener("click", () => {
+  openSheet();
+  void renderSheetPlays(true);
+});
 $("options").addEventListener("click", () => chrome.runtime.openOptionsPage());
 $("firstRunSettings").addEventListener("click", () => chrome.runtime.openOptionsPage());
 $<HTMLInputElement>("searchLimit").addEventListener("input", renderPage);
@@ -480,6 +574,12 @@ chrome.runtime.onMessage.addListener((m: BackgroundToPanel) => {
     renderPage();
   } else if (m?.type === "BASKET_CHANGED") void refreshBasket();
   else if (m?.type === "STATE_CHANGED") void refreshState();
+  else if (m?.type === "AUTH_CHANGED") {
+    auth = m.auth;
+    sheetPlays = null;
+    renderDest();
+    if (auth.signedIn) note($("signInNote"), null);
+  }
 });
 chrome.tabs.onActivated.addListener(() => {
   if (!PINNED_TAB) void loadContext();
@@ -489,6 +589,10 @@ chrome.tabs.onUpdated.addListener((id, info) => {
 });
 
 void refreshState();
+void refreshAuth();
 void loadContext();
 void refreshBasket();
 setInterval(() => void refreshState(), 5000);
+// Errors in the panel are reported through the worker, like worker errors.
+window.addEventListener("error", (e) => void msg({ type: "PANEL_ERROR", message: String(e.message), stack: e.error instanceof Error ? e.error.stack : null }).catch(() => undefined));
+window.addEventListener("unhandledrejection", (e) => void msg({ type: "PANEL_ERROR", message: e.reason instanceof Error ? e.reason.message : String(e.reason), stack: e.reason instanceof Error ? (e.reason.stack ?? null) : null }).catch(() => undefined));

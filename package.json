@@ -1,6 +1,6 @@
 {
   "name": "linkedin-webhook-exporter",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Open-source Chrome extension that captures LinkedIn profiles and Sales Navigator results and sends signed JSON to any webhook (Deepline, Clay, your own DB).",
   "license": "MIT",
   "author": "Deepline (https://deepline.com)",

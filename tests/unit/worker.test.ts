@@ -37,6 +37,8 @@ const dedupe = () => (fake.store.dedupe as Record<string, any>) ?? {};
 const log = () => (fake.store.activityLog as any[]) ?? [];
 const basket = () => (fake.sessionStore.basket as Record<string, any>) ?? {};
 const lastFetch = () => fetchMock.mock.calls.at(-1) as unknown as [string, RequestInit];
+/** Fetches other than the worker's own boot-time flag/session lookups. */
+const apiCalls = () => fetchMock.mock.calls.filter(([u]) => !/extension\/flags|auth\/session/.test(String(u)));
 
 beforeEach(async () => {
   await boot();
@@ -90,7 +92,7 @@ describe("capture, cap and dedupe", () => {
     const r = await send({ type: "CAPTURE", leads: [lead(1)], pageType: "profile", pageUrl: "https://www.linkedin.com/in/x/" }, PAGE);
     expect(r.rejectedReason).toBe("no_destination");
     await flushed();
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(apiCalls()).toHaveLength(0);
   });
   it("concurrent captures cannot exceed the daily cap or lose queue items", async () => {
     await boot({ dailyCap: 30 });
@@ -144,7 +146,7 @@ describe("Deepline play destination", () => {
     const r = await send({ type: "CAPTURE", leads: [lead(1), lead(2)], pageType: "profile", pageUrl: "https://www.linkedin.com/in/x/" }, PAGE);
     expect(r.queued).toBe(2);
     await flushed();
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(apiCalls()).toHaveLength(2);
     const [url, init] = lastFetch();
     expect(url).toBe("https://code.deepline.com/api/v2/plays/run");
     expect((init.headers as Record<string, string>).Authorization).toBe("Bearer dl_secret");
@@ -159,7 +161,7 @@ describe("Deepline play destination", () => {
     const r = await send({ type: "CAPTURE", leads: [lead(1)], pageType: "profile", pageUrl: "https://www.linkedin.com/in/x/" }, PAGE);
     expect(r.rejectedReason).toBe("unsupported_by_play");
     expect(r.detail).toMatch(/does not take people/);
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(apiCalls()).toHaveLength(0);
   });
   it("the side panel can send to a non-active destination explicitly; deleting a destination fails its pending items", async () => {
     await send({ type: "CAPTURE", leads: [lead(3)], pageType: "profile", pageUrl: "https://www.linkedin.com/in/x/", destinationId: "w1" }, PANEL);
@@ -318,5 +320,84 @@ describe("state and log", () => {
     expect(entries[0].t).toBeGreaterThanOrEqual(entries[2].t);
     expect(await send({ type: "CLEAR_LOG" }, PANEL)).toEqual([]);
     expect(log()).toEqual([]);
+  });
+});
+
+describe("Deepline sign-in (session) and the web app channel", () => {
+  const SESSION = { session: { user: { id: "u1", email: "rep@acme.com", name: "Rep" }, activeOrgId: "org_1" } };
+  beforeEach(async () => {
+    await boot({ destinations: [], activeDestinationId: null });
+    (fake.chrome as any).cookies.get = async () => ({ name: "better-auth.session_token" });
+    fetchMock.mockImplementation(async (url: string) => {
+      if (String(url).endsWith("/api/v2/auth/session")) return new Response(JSON.stringify(SESSION), { status: 200 });
+      if (String(url).includes("/api/v2/plays?")) return new Response(JSON.stringify({ plays: String(url).includes("owned") ? [{ playKey: "acme/warm-intro", name: "warm-intro", displayName: "Warm intro", inputSchema: { properties: { linkedin_url: {}, first_name: {} } } }] : [] }), { status: 200 });
+      if (String(url).endsWith("/api/v2/plays/run")) return new Response(JSON.stringify({ workflowId: "wf_s" }), { status: 202 });
+      return new Response("{}", { status: 200 });
+    });
+  });
+  it("reports the signed-in user from the cookie session and lists plays without an API key", async () => {
+    const a = await send({ type: "GET_AUTH", refresh: true }, PANEL);
+    expect(a).toMatchObject({ signedIn: true, email: "rep@acme.com", orgId: "org_1", baseUrl: "https://code.deepline.com" });
+    const sessionCall = fetchMock.mock.calls.find(([u]) => String(u).endsWith("/auth/session"))!;
+    expect((sessionCall[1] as RequestInit).credentials).toBe("include");
+    const r = await send({ type: "LIST_PLAYS" }, PANEL);
+    expect(r.ok).toBe(true);
+    const listCall = fetchMock.mock.calls.find(([u]) => String(u).includes("/api/v2/plays?origin=owned"))!;
+    expect((listCall[1] as RequestInit).credentials).toBe("include");
+    expect(((listCall[1] as RequestInit).headers as Record<string, string>).Authorization).toBeUndefined();
+    expect(log().some((e) => e.kind === "auth.changed" && /Signed in/.test(e.msg))).toBe(true);
+  });
+  it("adds a play with the sign-in and runs it with the session cookie, never a bearer header", async () => {
+    await send({ type: "GET_AUTH", refresh: true }, PANEL);
+    const st = await send({ type: "ADD_PLAY_DESTINATION", playKey: "acme/warm-intro", playName: "Warm intro", inputSchema: { properties: { linkedin_url: {}, first_name: {} } }, activate: true }, PANEL);
+    expect(st.settings.destinations[0]).toMatchObject({ kind: "deepline_play", playKey: "acme/warm-intro", apiKey: "", input: { mode: "mapped", acceptsLeads: true } });
+    expect(st.settings.activeDestinationId).toBe(st.settings.destinations[0].id);
+    const r = await send({ type: "CAPTURE", leads: [lead(1)], pageType: "profile", pageUrl: "https://www.linkedin.com/in/x/" }, PAGE);
+    expect(r.queued).toBe(1);
+    await flushed();
+    const run = fetchMock.mock.calls.find(([u]) => String(u).endsWith("/plays/run"))!;
+    expect((run[1] as RequestInit).credentials).toBe("include");
+    expect(((run[1] as RequestInit).headers as Record<string, string>).Authorization).toBeUndefined();
+    expect(JSON.parse((run[1] as RequestInit).body as string)).toEqual({ name: "acme/warm-intro", input: { linkedin_url: "https://www.linkedin.com/in/person-1", first_name: "Person" } });
+    expect(queue()[0]).toMatchObject({ status: "sent", runId: "wf_s" });
+  });
+  it("a signed-out rep gets a plain reason instead of a run", async () => {
+    (fake.chrome as any).cookies.get = async () => null;
+    fetchMock.mockImplementation(async (url: string) => new Response(String(url).includes("/api/v2/plays") ? '{"error":"Unauthorized"}' : "{}", { status: String(url).includes("/api/v2/plays") ? 401 : 200 }));
+    const a = await send({ type: "GET_AUTH", refresh: true }, PANEL);
+    expect(a.signedIn).toBe(false);
+    expect(fetchMock.mock.calls.some(([u]) => String(u).endsWith("/auth/session"))).toBe(false); // no cookie, no call
+    const r = await send({ type: "LIST_PLAYS" }, PANEL);
+    expect(r).toMatchObject({ ok: false, error: "Not signed in to Deepline" });
+  });
+  it("cookie changes on the Deepline host refresh the session; others are ignored", async () => {
+    await send({ type: "GET_AUTH", refresh: true }, PANEL);
+    const before = fetchMock.mock.calls.filter(([u]) => String(u).endsWith("/auth/session")).length;
+    for (const fn of fake.listeners.cookieChanged) await fn({ cookie: { name: "li_at", domain: "www.linkedin.com" }, removed: false });
+    await flushed();
+    expect(fetchMock.mock.calls.filter(([u]) => String(u).endsWith("/auth/session")).length).toBe(before);
+    for (const fn of fake.listeners.cookieChanged) await fn({ cookie: { name: "better-auth.session_token", domain: "code.deepline.com" }, removed: true });
+    await flushed();
+    expect(fetchMock.mock.calls.filter(([u]) => String(u).endsWith("/auth/session")).length).toBe(before + 1);
+  });
+  it("the web app channel answers ping / auth state only from Deepline origins", async () => {
+    const external = (msg: unknown, sender: Record<string, unknown>) => new Promise<any>((resolve) => fake.listeners.messageExternal[0](msg, sender, resolve));
+    await send({ type: "GET_AUTH", refresh: true }, PANEL);
+    expect(await external({ type: "ping" }, { url: "https://evil.example/app", origin: "https://evil.example" })).toEqual({ error: "forbidden" });
+    expect(await external({ type: "ping" }, { url: "http://deepline.com/app", origin: "http://deepline.com" })).toEqual({ error: "forbidden" });
+    const ok = await external({ type: "ping" }, { url: "https://code.deepline.com/app", origin: "https://code.deepline.com" });
+    expect(ok).toMatchObject({ ok: true, version: "test", signedIn: true });
+    expect(await external({ type: "get_auth_state" }, { url: "https://deepline.com/", origin: "https://deepline.com" })).toMatchObject({ signedIn: true, email: "rep@acme.com" });
+    expect(await external({ type: "steal" }, { url: "https://deepline.com/", origin: "https://deepline.com" })).toEqual({ error: "unknown message" });
+    expect(log().filter((e) => e.kind === "external.message")).toHaveLength(3);
+  });
+  it("telemetry events are logged locally (no write key compiled in) and never fetch", async () => {
+    await send({ type: "GET_AUTH", refresh: true }, PANEL);
+    const before = fetchMock.mock.calls.length;
+    await send({ type: "CAPTURE", leads: [lead(2)], pageType: "profile", pageUrl: "https://www.linkedin.com/in/x/" }, { ...PAGE });
+    await flushed();
+    expect(fetchMock.mock.calls.slice(before).some(([u]) => String(u).includes("segment"))).toBe(false);
+    expect(log().some((e) => e.kind === "telemetry.event" && e.msg === "Event: push_queued")).toBe(false); // no destination: nothing queued
+    expect(log().some((e) => e.kind === "telemetry.event")).toBe(true); // signed_in was recorded
   });
 });

@@ -2,14 +2,16 @@ declare const __EXTENSION_VERSION__: string;
 declare const __TEST_BUILD__: boolean;
 
 import { addToBasket, basketItems, basketPages, groupByPage, removeFromBasket, type Basket } from "../shared/basket";
-import { buildLeadRuns, buildSearchRun, listPlays, testApiKey, unfillableRequired } from "../shared/deepline";
+import { buildLeadRuns, buildSearchRun, inferPlayInput, listPlays, testApiKey, unfillableRequired } from "../shared/deepline";
 import { buildBodies, buildSearchBody } from "../shared/mapping";
-import type { BasketResponse, CaptureResponse, ContentToBackground, ListPlaysResponse, PageContext, SearchCaptureResponse, StateResponse } from "../shared/messages";
+import type { AuthResponse, BasketResponse, CaptureResponse, ContentToBackground, ListPlaysResponse, PageContext, SearchCaptureResponse, StateResponse } from "../shared/messages";
 import { dedupeKey } from "../shared/normalize";
 import { buildSearchRecord, savedSearchIdFrom, searchKey, searchName } from "../shared/search";
-import { activeDestination, describeDestination, getSettings, redactDestination, sanitizeDestination, saveSettings, toContentSettings, validateWebhookUrl } from "../shared/settings";
+import { activeDestination, describeDestination, getSettings, newId, redactDestination, sanitizeDestination, saveSettings, toContentSettings, validateWebhookUrl } from "../shared/settings";
+import { DEFAULT_FLAGS, fetchFlags, installErrorHandlers, reportError, track, type Flags, type TelemetryContext } from "../shared/telemetry";
 import type { Destination, ImportInfo, LeadRecord, PageType, QueueItem, Settings, SourceInfo } from "../shared/types";
 import { isAllowedPageUrl, isPageType, validateLead, validateLeads } from "../shared/validate";
+import { fetchSession, isSessionCookieChange, signInUrl, type SessionState } from "./auth";
 import { withLock } from "./lock";
 import { clearLog, logEvent, readLog } from "../shared/log";
 import { afterAttempt, claim, clearQueue, due, newItem, nextWake, prune, recoverStaleLeases } from "./queue";
@@ -18,8 +20,8 @@ import { playRunBody, sendBody } from "./sender";
 const VERSION = typeof __EXTENSION_VERSION__ === "string" ? __EXTENSION_VERSION__ : "dev";
 const TEST_BUILD = typeof __TEST_BUILD__ === "boolean" ? __TEST_BUILD__ : false;
 const ALARM = "lwe-flush";
-const KEYS = { queue: "queue", dedupe: "dedupe", daily: "daily" } as const;
-const SESSION_KEYS = { basket: "basket", shareLinks: "shareLinks" } as const;
+const KEYS = { queue: "queue", dedupe: "dedupe", daily: "daily", anonymousId: "anonymousId" } as const;
+const SESSION_KEYS = { basket: "basket", shareLinks: "shareLinks", auth: "auth" } as const;
 
 /* ------------------------------------------------------------ storage */
 
@@ -124,9 +126,84 @@ function resolveDestination(settings: Settings, destinationId?: string): Destina
 function destinationProblem(dest: Destination | null): CaptureResponse["rejectedReason"] {
   if (!dest) return "no_destination";
   if (dest.kind === "webhook" && !validateWebhookUrl(dest.url).ok) return "invalid_url";
-  if (dest.kind === "deepline_play" && !dest.apiKey) return "invalid_url";
+  // A play without an API key uses the rep's Deepline sign-in; the run
+  // itself fails with 401 (not retried) if the session is gone.
   return null;
 }
+
+/* ------------------------------------------------------------ auth (session) */
+
+let sessionCache: SessionState | null = null;
+
+async function getAuth(refresh = false): Promise<AuthResponse> {
+  const settings = await getSettings();
+  const base = settings.deeplineBaseUrl;
+  if (!refresh && sessionCache && sessionCache.baseUrl === base && Date.now() - sessionCache.checkedAt < 5 * 60_000) return toAuth(sessionCache);
+  const prev = sessionCache?.signedIn ?? null;
+  sessionCache = await fetchSession(base, fetch, chrome.cookies);
+  await session().set({ [SESSION_KEYS.auth]: sessionCache }).catch(() => undefined);
+  if (prev !== sessionCache.signedIn) {
+    await logEvent("auth.changed", sessionCache.signedIn ? `Signed in to Deepline as ${sessionCache.email ?? "user"}` : "Not signed in to Deepline", { signedIn: sessionCache.signedIn, host: new URL(base).host, orgId: sessionCache.orgId });
+    broadcast({ type: "AUTH_CHANGED", auth: toAuth(sessionCache) });
+    if (sessionCache.signedIn) void telemetryTrack("signed_in", {});
+  }
+  return toAuth(sessionCache);
+}
+function toAuth(s: SessionState): AuthResponse {
+  return { signedIn: s.signedIn, baseUrl: s.baseUrl, email: s.email, name: s.name, orgId: s.orgId, error: s.error };
+}
+
+chrome.cookies?.onChanged?.addListener(async (change) => {
+  const settings = await getSettings();
+  if (isSessionCookieChange(change, settings.deeplineBaseUrl)) {
+    sessionCache = null;
+    void getAuth(true);
+  }
+});
+
+/* ------------------------------------------------------------ telemetry */
+
+let flags: Flags = { ...DEFAULT_FLAGS };
+
+async function anonymousId(): Promise<string> {
+  const cur = (await chrome.storage.local.get(KEYS.anonymousId))[KEYS.anonymousId];
+  if (typeof cur === "string" && cur) return cur;
+  const id = crypto.randomUUID();
+  await chrome.storage.local.set({ [KEYS.anonymousId]: id });
+  return id;
+}
+
+async function telemetryContext(): Promise<TelemetryContext> {
+  const settings = await getSettings();
+  const auth = sessionCache?.baseUrl === settings.deeplineBaseUrl ? sessionCache : null;
+  const key = settings.destinations.find((d): d is Extract<Destination, { kind: "deepline_play" }> => d.kind === "deepline_play" && !!d.apiKey);
+  return {
+    enabled: settings.telemetry && flags.telemetry,
+    anonymousId: await anonymousId(),
+    userId: auth?.userId ?? null,
+    orgId: auth?.orgId ?? null,
+    baseUrl: auth?.signedIn || key ? (key?.baseUrl ?? settings.deeplineBaseUrl) : null,
+    apiKey: auth?.signedIn ? null : (key?.apiKey ?? null)
+  };
+}
+async function telemetryTrack(event: string, properties: Record<string, unknown>): Promise<void> {
+  try {
+    await track(await telemetryContext(), { event, properties });
+  } catch {
+    /* never block work on telemetry */
+  }
+}
+installErrorHandlers("service-worker", (rep) => {
+  void telemetryContext().then((ctx) => reportError(ctx, rep)).catch(() => undefined);
+});
+void (async () => {
+  try {
+    const settings = await getSettings();
+    flags = await fetchFlags(settings.deeplineBaseUrl);
+  } catch {
+    flags = { ...DEFAULT_FLAGS };
+  }
+})();
 
 /* ------------------------------------------------------------ capture */
 
@@ -233,6 +310,7 @@ async function handleCapture(msg: CaptureMsg): Promise<CaptureResponse> {
     await logEvent("capture.queued", `${leads.length} lead(s) queued for ${describeDestination(dest)}`, { count: leads.length, importId, importKind: imp.import_kind, searchName: imp.search_name, events: enq.eventIds, leads: leads.map(dedupeKey), remainingToday: remaining - leads.length, destination: dest.id });
     void flush();
     broadcast({ type: "STATE_CHANGED" });
+    void telemetryTrack("push_queued", { count: leads.length, page_type: msg.pageType, import_kind: imp.import_kind, destination_kind: dest.kind, skipped: skipped.length });
     return { ok: true, queued: leads.length, skippedDuplicates: skipped, rejectedReason: null, remainingToday: remaining - leads.length };
   });
 }
@@ -279,6 +357,7 @@ async function handleSearchCapture(msg: SearchMsg): Promise<SearchCaptureRespons
     await logEvent("search.saved", `Search sent to ${describeDestination(dest)}: ${name ?? record.search_url} (limit ${limit})`, { eventId, pageType: msg.pageType, searchUrl: record.search_url, totalHint: hint, limit, savedSearchId: savedId, destination: dest.id });
     void flush();
     broadcast({ type: "STATE_CHANGED" });
+    void telemetryTrack("search_import_started", { page_type: msg.pageType, limit, destination_kind: dest.kind, saved_search: !!savedId });
     return { ok: true, queued: true, duplicate: false, rejectedReason: null };
   });
 }
@@ -527,13 +606,13 @@ async function testDestination(raw: Destination | undefined, destinationId: stri
     const body = JSON.stringify({ schema_version: "1", event: "test", event_id: eventId, sent_at: new Date().toISOString(), source, custom: settings.customFields });
     r = await sendBody(dest, body, eventId, { version: VERSION, timeoutMs: 10_000 });
   } else {
-    r = await testApiKey(dest.baseUrl, dest.apiKey);
+    r = await testApiKey(dest.baseUrl, dest.apiKey || null);
   }
   await logEvent("destination.test", r.ok ? `${describeDestination(dest)}: test ok (${r.status})` : `${describeDestination(dest)}: test failed: ${r.error}`, { status: r.status, error: r.error, destination: dest.id, kind: dest.kind });
   return { ok: r.ok, status: r.status, error: r.error };
 }
 
-async function handleListPlays(baseUrl: string, apiKey: string): Promise<ListPlaysResponse> {
+async function handleListPlays(baseUrl: string, apiKey: string | null): Promise<ListPlaysResponse> {
   try {
     const plays = await listPlays(baseUrl, apiKey);
     await logEvent("plays.listed", `${plays.length} Deepline play(s) listed`, { count: plays.length, host: new URL(baseUrl).host });
@@ -544,6 +623,39 @@ async function handleListPlays(baseUrl: string, apiKey: string): Promise<ListPla
     return { ok: false, plays: [], error };
   }
 }
+
+/** Add a play as a destination using the rep's Deepline sign-in (no key). */
+async function addPlayDestination(playKey: string, playName: string, inputSchema: Record<string, unknown> | null, activate: boolean): Promise<StateResponse> {
+  const settings = await getSettings();
+  const existing = settings.destinations.find((d) => d.kind === "deepline_play" && d.playKey === playKey && !d.apiKey);
+  const id = existing?.id ?? newId();
+  const dest: Destination = { id, kind: "deepline_play", name: playName || playKey, favorite: existing?.favorite ?? false, baseUrl: settings.deeplineBaseUrl, apiKey: "", playKey, playName: playName || playKey, input: inferPlayInput(inputSchema) };
+  const next = await saveSettings({ destinations: [...settings.destinations.filter((d) => d.id !== id), dest], activeDestinationId: activate || !settings.activeDestinationId ? id : settings.activeDestinationId });
+  await logEvent("destination.changed", `Play connected with Deepline sign-in: ${playKey}`, { destination: id, play: playKey, active: next.activeDestinationId });
+  void telemetryTrack("destination_connected", { kind: "deepline_play", auth: "session" });
+  broadcast({ type: "STATE_CHANGED" });
+  return getState(true);
+}
+
+/* ------------------------------------------------------------ side panel per tab */
+
+/** Like Frontier: the panel is offered on LinkedIn tabs only. */
+async function syncPanelForTab(tabId: number, url: string | undefined): Promise<void> {
+  if (!chrome.sidePanel?.setOptions) return;
+  const enabled = isAllowedPageUrl(url, TEST_BUILD);
+  try {
+    await chrome.sidePanel.setOptions({ tabId, path: "sidepanel.html", enabled });
+  } catch {
+    /* tab gone */
+  }
+}
+chrome.tabs?.onUpdated?.addListener((tabId, info, tab) => {
+  if (info.status === "loading" || info.url) void syncPanelForTab(tabId, tab.url ?? info.url);
+});
+chrome.tabs?.onActivated?.addListener(async ({ tabId }) => {
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (tab) void syncPanelForTab(tabId, tab.url);
+});
 
 /* ------------------------------------------------------------ messages */
 
@@ -606,8 +718,31 @@ chrome.runtime.onMessage.addListener((msg: ContentToBackground, sender, sendResp
       }
       case "TEST_DESTINATION":
         return fromExt ? testDestination(msg.destination, msg.destinationId) : { error: "forbidden" };
-      case "LIST_PLAYS":
-        return fromExt ? handleListPlays(String(msg.baseUrl ?? ""), String(msg.apiKey ?? "")) : { error: "forbidden" };
+      case "LIST_PLAYS": {
+        if (!fromExt) return { error: "forbidden" };
+        const s = await getSettings();
+        return handleListPlays(String(msg.baseUrl || s.deeplineBaseUrl), typeof msg.apiKey === "string" && msg.apiKey ? msg.apiKey : null);
+      }
+      case "ADD_PLAY_DESTINATION":
+        return fromExt ? addPlayDestination(String(msg.playKey ?? ""), String(msg.playName ?? ""), msg.inputSchema && typeof msg.inputSchema === "object" ? msg.inputSchema : null, msg.activate !== false) : { error: "forbidden" };
+      case "GET_AUTH":
+        return fromExt ? getAuth(!!msg.refresh) : { error: "forbidden" };
+      case "PANEL_ERROR": {
+        if (!fromExt) return { error: "forbidden" };
+        void telemetryContext().then((ctx) => reportError(ctx, { where: sender.url?.includes("options") ? "options" : "side-panel", message: String(msg.message ?? "").slice(0, 2000), stack: typeof msg.stack === "string" ? msg.stack : null })).catch(() => undefined);
+        return { ok: true };
+      }
+      case "SIGN_IN": {
+        if (!fromExt) return { error: "forbidden" };
+        const s = await getSettings();
+        await chrome.tabs.create({ url: signInUrl(s.deeplineBaseUrl), active: true });
+        return { ok: true };
+      }
+      case "INTERCEPT_STATS": {
+        if (!fromPage) return { error: "forbidden" };
+        await logEvent("intercept.captured", `LinkedIn API responses observed: ${Number(msg.responses) || 0} (${Number(msg.people) || 0} people${typeof msg.total === "number" ? `, ${msg.total} total` : ""})`, { responses: Number(msg.responses) || 0, people: Number(msg.people) || 0, total: typeof msg.total === "number" ? msg.total : null, pageType: isPageType(msg.pageType) ? msg.pageType : null, pageUrl: tabUrl });
+        return { ok: true };
+      }
       case "SET_ACTIVE_DESTINATION": {
         if (!fromExt) return { error: "forbidden" };
         const s = await saveSettings({ activeDestinationId: String(msg.destinationId) });
@@ -696,6 +831,49 @@ function sameOrigin(a: unknown, b: string | undefined): boolean {
 
 chrome.tabs?.onRemoved?.addListener((tabId) => {
   contexts.delete(tabId);
+});
+
+/** The Deepline web app may talk to the extension (manifest
+ *  `externally_connectable`), the way Frontier's app talks to its extension.
+ *  Only a fixed, side-effect-light set of requests is honoured and the
+ *  sender's origin is re-checked here rather than trusted from the manifest. */
+export function isTrustedExternalOrigin(url: string | undefined, baseUrl: string): boolean {
+  try {
+    const u = new URL(url ?? "");
+    const host = u.hostname;
+    const base = new URL(baseUrl).hostname;
+    return u.protocol === "https:" && (host === base || host === "deepline.com" || host.endsWith(".deepline.com"));
+  } catch {
+    return false;
+  }
+}
+chrome.runtime.onMessageExternal?.addListener((msg: { type?: string }, sender, sendResponse) => {
+  (async () => {
+    const settings = await getSettings();
+    if (!isTrustedExternalOrigin(sender.url ?? sender.origin, settings.deeplineBaseUrl) || !msg || typeof msg.type !== "string") return { error: "forbidden" };
+    await logEvent("external.message", `Web app message: ${msg.type}`, { type: msg.type, origin: sender.origin ?? null });
+    switch (msg.type) {
+      case "ping":
+        return { ok: true, version: VERSION, signedIn: (await getAuth()).signedIn };
+      case "get_auth_state":
+        return await getAuth(true);
+      case "open_side_panel": {
+        const id = sender.tab?.id;
+        if (id == null || !chrome.sidePanel?.open) return { ok: false };
+        await chrome.sidePanel.open({ tabId: id }).catch(() => undefined);
+        return { ok: true };
+      }
+      default:
+        return { error: "unknown message" };
+    }
+  })().then(sendResponse, (e) => sendResponse({ error: e instanceof Error ? e.message : String(e) }));
+  return true;
+});
+
+void getAuth(true).catch(() => undefined);
+chrome.runtime.onInstalled.addListener((d) => {
+  if (d.reason === "install") void telemetryTrack("installed", {});
+  if (d.reason === "update") void telemetryTrack("updated", { previous: d.previousVersion ?? null });
 });
 
 chrome.alarms.onAlarm.addListener((a) => {

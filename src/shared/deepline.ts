@@ -178,6 +178,14 @@ export interface FetchLike {
   (input: string, init?: RequestInit): Promise<Response>;
 }
 
+/** Request options for the Deepline API: an API key when the operator set
+ *  one, otherwise the browser session (cookies). */
+export function apiInit(apiKey: string | null | undefined, extra: RequestInit = {}): RequestInit {
+  const headers: Record<string, string> = { Accept: "application/json", ...((extra.headers as Record<string, string>) ?? {}) };
+  if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+  return { ...extra, headers, credentials: apiKey ? "omit" : "include", redirect: "error" };
+}
+
 function toSummary(p: Record<string, unknown>): PlaySummary | null {
   const playKey = typeof p.playKey === "string" ? p.playKey : typeof p.reference === "string" ? p.reference : null;
   if (!playKey) return null;
@@ -195,12 +203,12 @@ function toSummary(p: Record<string, unknown>): PlaySummary | null {
 }
 
 /** List callable plays: the org's own first, then Deepline prebuilt ones. */
-export async function listPlays(baseUrl: string, apiKey: string, fetchImpl: FetchLike = fetch): Promise<PlaySummary[]> {
+export async function listPlays(baseUrl: string, apiKey: string | null, fetchImpl: FetchLike = fetch): Promise<PlaySummary[]> {
   const base = normalizeBaseUrl(baseUrl);
   const out: PlaySummary[] = [];
   for (const origin of ["owned", "prebuilt"] as const) {
-    const res = await fetchImpl(`${base}/api/v2/plays?origin=${origin}&limit=100`, { headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" }, credentials: "omit", redirect: "error" });
-    if (res.status === 401 || res.status === 403) throw new Error("Deepline rejected the API key");
+    const res = await fetchImpl(`${base}/api/v2/plays?origin=${origin}&limit=100`, apiInit(apiKey));
+    if (res.status === 401 || res.status === 403) throw new Error(apiKey ? "Deepline rejected the API key" : "Not signed in to Deepline");
     if (!res.ok) throw new Error(`Deepline responded ${res.status}`);
     const json = (await res.json()) as { plays?: unknown };
     const plays = Array.isArray(json.plays) ? json.plays : [];
@@ -215,11 +223,11 @@ export async function listPlays(baseUrl: string, apiKey: string, fetchImpl: Fetc
 }
 
 /** Cheap credential check: one page of one play. */
-export async function testApiKey(baseUrl: string, apiKey: string, fetchImpl: FetchLike = fetch): Promise<{ ok: boolean; status: number | null; error: string | null }> {
+export async function testApiKey(baseUrl: string, apiKey: string | null, fetchImpl: FetchLike = fetch): Promise<{ ok: boolean; status: number | null; error: string | null }> {
   try {
-    const res = await fetchImpl(`${normalizeBaseUrl(baseUrl)}/api/v2/plays?limit=1`, { headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" }, credentials: "omit", redirect: "error" });
+    const res = await fetchImpl(`${normalizeBaseUrl(baseUrl)}/api/v2/plays?limit=1`, apiInit(apiKey));
     if (res.ok) return { ok: true, status: res.status, error: null };
-    return { ok: false, status: res.status, error: res.status === 401 || res.status === 403 ? "API key rejected" : `HTTP ${res.status}` };
+    return { ok: false, status: res.status, error: res.status === 401 || res.status === 403 ? (apiKey ? "API key rejected" : "Not signed in to Deepline") : `HTTP ${res.status}` };
   } catch (e) {
     return { ok: false, status: null, error: e instanceof Error ? e.message : String(e) };
   }

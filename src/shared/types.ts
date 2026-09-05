@@ -27,7 +27,9 @@ export type ParseWarning =
   | "experience_grouping_uncertain"
   | "sdui_layout"
   | "name_cleaned"
-  | "name_fallback_key";
+  | "name_fallback_key"
+  /** Fields were filled from LinkedIn's own API responses observed on the page. */
+  | "api_merged";
 
 export interface LeadRecord {
   full_name: string;
@@ -209,6 +211,7 @@ export interface PlayDestination {
   favorite: boolean;
   /** https://code.deepline.com by default; self-hosted / local dev allowed. */
   baseUrl: string;
+  /** Empty means "use my Deepline sign-in" (the browser session cookie). */
   apiKey: string;
   /** Play reference as accepted by the run API (`name`): e.g. "linkedin-capture" or "prebuilt/person-linkedin-to-email". */
   playKey: string;
@@ -232,11 +235,17 @@ export interface Settings {
   includeAbout: boolean;
   /** Default `limit` offered when sending a search to a backend. */
   searchDefaultLimit: number;
+  /** Deepline address the sign-in and play picker use. */
+  deeplineBaseUrl: string;
+  /** Anonymous usage events and error reports to Deepline (see PRIVACY.md). */
+  telemetry: boolean;
+  /** Read LinkedIn API responses the page loads to fill in what the DOM lacks. */
+  intercept: boolean;
 }
 
 /** The subset of settings a content script is allowed to see. Secrets never
  *  cross into a page-facing context. */
-export type ContentSettings = Pick<Settings, "includeExperience" | "includeEducation" | "includeAbout" | "dedupe" | "searchDefaultLimit"> & {
+export type ContentSettings = Pick<Settings, "includeExperience" | "includeEducation" | "includeAbout" | "dedupe" | "searchDefaultLimit" | "intercept"> & {
   hasDestination: boolean;
   destinationName: string | null;
   destinationKind: DestinationKind | null;
@@ -253,7 +262,10 @@ export const DEFAULT_SETTINGS: Settings = {
   includeExperience: true,
   includeEducation: true,
   includeAbout: true,
-  searchDefaultLimit: 100
+  searchDefaultLimit: 100,
+  deeplineBaseUrl: "https://code.deepline.com",
+  telemetry: true,
+  intercept: true
 };
 
 export const LIMITS = {

@@ -150,7 +150,7 @@
 </head>
 <body>
 <header>
-  <span class="brand"><img src="brand/deepline-wordmark.svg" alt="Deepline" height="14"><span>for LinkedIn</span></span>
+  <span class="brand"><img src="brand/deepline-wordmark.svg" alt="Deepline" height="14"><span id="account">for LinkedIn</span></span>
   <button id="options" class="icon-btn" type="button" title="Settings" aria-label="Settings">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
   </button>
@@ -165,12 +165,20 @@
 </div>
 
 <main>
-  <!-- First run: nothing connected yet -->
+  <!-- First run: sign in, then pick a play -->
+  <section id="signIn" hidden>
+    <div class="card">
+      <div class="title" style="font-weight:600">Sign in to Deepline to start pushing people.</div>
+      <div class="muted small" style="margin-top:4px">Same login as the Deepline app. The extension follows your sign-in; there is nothing to paste.</div>
+      <div class="btn-row"><button id="signInBtn" class="btn primary" type="button">Sign in to Deepline</button><button id="signInSettings" class="btn" type="button">Use a webhook instead</button></div>
+      <div id="signInNote" class="note" hidden></div>
+    </div>
+  </section>
   <section id="firstRun" hidden>
     <div class="card">
-      <div class="title" style="font-weight:600">Connect a destination before your first push.</div>
-      <div class="muted small" style="margin-top:4px">Choose a Deepline play (or another tool) in Settings, then come back to LinkedIn. Ask your RevOps admin which one your team uses.</div>
-      <div class="btn-row"><button id="firstRunSettings" class="btn primary" type="button">Open Settings</button></div>
+      <div class="title" style="font-weight:600">Pick the play your people go to.</div>
+      <div class="muted small" style="margin-top:4px">Ask your RevOps admin which one your team uses.</div>
+      <div class="btn-row"><button id="firstRunPick" class="btn primary" type="button">Choose a play</button><button id="firstRunSettings" class="btn" type="button">Settings</button></div>
     </div>
   </section>
 
@@ -234,7 +242,11 @@
     <div class="head"><span id="sheetTitle">Send to</span><button id="sheetClose" class="icon-btn" type="button" aria-label="Close"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>
     <div class="search"><input id="sheetSearch" type="search" placeholder="Search plays…" autocomplete="off"></div>
     <ul id="sheetList"></ul>
-    <div class="foot"><button id="sheetAdd" class="link" type="button">+ Connect a play or webhook</button></div>
+    <div id="sheetPlays" hidden>
+      <div class="muted small" style="padding:4px 16px 6px">Your Deepline plays</div>
+      <ul id="sheetPlayList"></ul>
+    </div>
+    <div class="foot"><button id="sheetAdd" class="link" type="button">+ Add one of my Deepline plays</button> · <button id="sheetSettings" class="link quiet" type="button">Settings</button></div>
   </div>
 </div>
 

@@ -9,8 +9,9 @@ own server), from a side panel. Pick a few people across several result
 pages, push them with one button, or hand a whole Sales Navigator search to
 Deepline and let the backend fetch the members.
 
-No account of its own, no server of its own, no telemetry. Settings live in
-your browser profile only.
+No account of its own and no server of its own: it follows your Deepline
+sign-in. Settings live in your browser profile only. Anonymous usage events
+and error reports go to Deepline unless you turn them off (see PRIVACY.md).
 
 > **Read before using.** LinkedIn's [User Agreement](https://www.linkedin.com/legal/user-agreement)
 > prohibits browser extensions that scrape or automate its service, and
@@ -34,12 +35,18 @@ your browser profile only.
   you chose; Deepline fetches the members in the background. For a saved
   search, press Sales Navigator's own "Share search" once so the shareable
   link (with the full query) is sent instead of the private deep link.
-- **Plays, not URLs**: paste a Deepline API key once, load your plays, pick
-  one. Switch between plays from the "Sending to" chip; pin favourites.
-  Webhooks with signing secrets and extra headers stay available under
-  "Connect a webhook" for everyone else.
+- **Plays, not URLs**: sign in to Deepline once and pick a play from the
+  panel; the extension follows your sign-in, so there is nothing to paste.
+  Switch between plays from the "Sending to" chip; pin favourites. Webhooks
+  with signing secrets and extra headers stay available under "Send to
+  another tool" for everyone else.
 - **Recent**: every push with a plain status (Sent, Running, Retrying,
   Failed) and a retry link. Full history with secrets redacted in Settings.
+- **Fills in what LinkedIn hides**: a page-context bridge observes the API
+  responses the LinkedIn page itself loads (the same Sales Navigator and
+  Voyager endpoints Frontier reads) and adds public profile links, exact
+  titles, companies and regions to what the DOM shows. Passive: it never
+  sends a request. Off switch in Settings; see `docs/RISK-REVIEW.md`.
 
 ## Install (developer)
 
@@ -53,11 +60,14 @@ Click the toolbar icon to open the side panel.
 
 ## Connect Deepline
 
-1. Deepline dashboard → API keys → copy a key.
-2. Extension Settings → **Connect a play** → paste the key → **Load my plays**
-   → pick a play → **Save**.
-3. Open any LinkedIn profile or Sales Navigator search. The pinned button now
-   reads "Push … to <play>".
+1. Open the side panel on any LinkedIn page and click **Sign in to Deepline**
+   (or just sign in to the Deepline app in another tab; the extension follows
+   your sign-in, the way Frontier's does).
+2. **Choose a play** in the panel. Your workspace's plays load from your own
+   sign-in. Nothing to paste.
+3. The pinned button now reads "Push … to <play>".
+
+Prefer a key? Settings → Use a Deepline play → Advanced → paste an API key.
 
 The extension reads the play's input schema and shapes the run input to it:
 `leads[]` gets one run per push, `lead{}` or field names such as
@@ -159,10 +169,12 @@ keep the daily cap low and make sure you have a lawful basis for processing
 the people you push. Nothing here is a safe harbor. You are responsible for
 how you use this tool.
 
-Detection surface, for the record: no `cookies` permission, no request
-interception, no unsolicited fetches to LinkedIn, on-page UI in a shadow root,
-every push is a real user click. The one page-context script only observes
-the link Sales Navigator's own "Share search" button copies.
+Detection surface, for the record: `cookies` is scoped to `code.deepline.com`
+(sign-in state only), no `<all_urls>`, no `scripting`, no unsolicited fetches
+to LinkedIn, on-page UI in a shadow root, every push is a real user click.
+The page-context bridge patches `XMLHttpRequest` and `fetch` to observe the
+responses LinkedIn's own page loads (see `docs/RISK-REVIEW.md` for what that
+means for account risk) and the link "Share search" copies.
 
 ## Sample pages, tests, audit
 

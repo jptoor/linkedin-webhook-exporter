@@ -26,21 +26,26 @@ const manifest = {
   // storage: settings/queue. alarms: retry schedule. sidePanel: the panel.
   // tabs: read the active tab's URL so the panel follows it (LinkedIn only,
   // via host_permissions) and relay actions to that tab's content script.
-  permissions: ["storage", "alarms", "sidePanel", "tabs"],
-  // Only LinkedIn is requested at install. The play/webhook host the user
-  // configures is requested as an optional host permission at save time.
-  host_permissions: matches,
+  // cookies: notice Deepline sign-in / sign-out on code.deepline.com only
+  // (the cookie value is never read into extension code; the session is used
+  // through credentials: "include" on requests to that host).
+  permissions: ["storage", "alarms", "sidePanel", "tabs", "cookies"],
+  // LinkedIn (content scripts) and Deepline (sign-in, plays) at install.
+  // Any other play/webhook host is requested as an optional permission.
+  host_permissions: [...matches, "https://code.deepline.com/*"],
   optional_host_permissions: ["https://*/*", "http://localhost/*", "http://127.0.0.1/*"],
   background: { service_worker: "background.js", type: "module" },
   content_scripts: [
     { matches, js: ["content.js"], css: ["content.css"], run_at: "document_idle" },
-    // MAIN-world helper: hands the link copied by Sales Navigator's "Share
-    // search" to the content script (saved searches only resolve for their
-    // owner; the share link carries the full query a backend can run).
-    { matches, js: ["main-world.js"], run_at: "document_start", world: "MAIN" }
+    // Page bridge (MAIN world, document_start): passively observes the
+    // LinkedIn API responses the page itself loads and the link copied by
+    // Sales Navigator's "Share search". Never issues requests of its own.
+    { matches, js: ["page-bridge.js"], run_at: "document_start", world: "MAIN" }
   ],
   action: { default_title: "Deepline for LinkedIn" },
   side_panel: { default_path: "sidepanel.html" },
+  // The Deepline web app can ping the extension / open the panel.
+  externally_connectable: { matches: ["https://deepline.com/*", "https://*.deepline.com/*"] },
   options_ui: { page: "options.html", open_in_tab: true },
   commands: {
     "send-current": {
@@ -56,7 +61,7 @@ await build({
   entryPoints: {
     background: "src/background/service-worker.ts",
     content: "src/content/index.ts",
-    "main-world": "src/content/main-world.ts",
+    "page-bridge": "src/content/page-bridge.ts",
     options: "src/options/options.ts",
     sidepanel: "src/sidepanel/sidepanel.ts"
   },
@@ -66,7 +71,13 @@ await build({
   outdir,
   sourcemap: isTest ? "inline" : false,
   minify: !isTest,
-  define: { __EXTENSION_VERSION__: JSON.stringify(pkg.version), __TEST_BUILD__: JSON.stringify(isTest), __LWE_DEBUG__: JSON.stringify(isTest || process.env.LWE_DEBUG === "1") },
+  define: {
+    __EXTENSION_VERSION__: JSON.stringify(pkg.version),
+    __TEST_BUILD__: JSON.stringify(isTest),
+    __LWE_DEBUG__: JSON.stringify(isTest || process.env.LWE_DEBUG === "1"),
+    // Product analytics go to Segment only when a write key is compiled in.
+    __SEGMENT_WRITE_KEY__: JSON.stringify(process.env.SEGMENT_WRITE_KEY ?? "")
+  },
   logLevel: "info"
 });
 

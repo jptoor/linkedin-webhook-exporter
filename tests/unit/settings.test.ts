@@ -93,7 +93,7 @@ describe("sanitizeSettings", () => {
     const c = toContentSettings(s);
     expect(JSON.stringify(c)).not.toMatch(/SECRET|TOKEN/);
     expect(c).toMatchObject({ hasDestination: true, destinationKind: "deepline_play", destinationName: "k" });
-    expect(Object.keys(c).sort()).toEqual(["dedupe", "destinationKind", "destinationName", "hasDestination", "includeAbout", "includeEducation", "includeExperience", "searchDefaultLimit"]);
+    expect(Object.keys(c).sort()).toEqual(["dedupe", "destinationKind", "destinationName", "hasDestination", "includeAbout", "includeEducation", "includeExperience", "intercept", "searchDefaultLimit"]);
     const red = s.destinations.map(redactDestination);
     expect(JSON.stringify(red)).not.toMatch(/SECRET|TOKEN/);
   });
