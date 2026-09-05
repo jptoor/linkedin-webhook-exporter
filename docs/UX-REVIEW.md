@@ -190,3 +190,22 @@ Visual verdict: pass on the project’s anti-slop direction. The warm paper/plum
 5. Unify saved-search recovery: open/focus the side panel, say **“This saved search is private,”** then **“Link ready — start the import.”**
 
 These five changes preserve the current architecture and visual identity while removing the most expensive rep questions: where do I configure this, what exactly will happen, did it start, and how do I know my picks survived?
+
+## Status (applied 2026-09-05, same day)
+
+| Finding | Status |
+|---|---|
+| UX-01 first-run handoff | Done: "Connect a destination before your first push" card with Open Settings, shown until a destination exists. |
+| UX-02 saved search from the dock | Done: the dock no longer sends the rep hunting for "Share search"; it opens the side panel, which owns the "This saved search is private → Get shareable link → Shareable link ready. Start the import." flow. |
+| UX-03 search import copy | Done: "Search import", "Import up to N people from “…”" (follows the limit field), "<destination> will fetch matching people in the background. You can keep working in LinkedIn.", "Start search import". |
+| UX-04 import state | Done: pinned bar reads "Search import started for <destination>" (20 s) and the card says "Search import started: up to N people are being fetched…". A terminal "Completed" state needs a run-status poll and is not implemented. |
+| UX-05 selection header | Done: "6 selected across 3 pages", "Add all 10 on this page" / "Remove all 10 on this page", "Clear selection". |
+| UX-06 "ticked rows" | Done: "Add LinkedIn selections" and the rewritten hint. |
+| UX-07 dock label | Done: dock mounts as "Loading…" (disabled) and resolves to "Push to <destination>" / "Push 6 to <destination>"; relabels live when the destination changes. |
+| UX-08 saved-search copy | Done (see UX-02). |
+| UX-09 settings vocabulary | Done: "Use a Deepline play" / "Send to another tool", RevOps hint, "Find my plays", "N plays found", "Choose the play to send people to", "Ready: <play>", "Use this destination", "Ready to push to “<name>”", rows read "<name> · ready". |
+| UX-10 300 px layout | Done: import row and heading actions wrap; the pinned button may wrap to two lines. |
+| UX-11 picker focus | Done: focus trap, Escape and close restore focus to the chip, `aria-labelledby`. |
+| UX-12 pill labels | Done: "Select <first name>" / "Remove <first name> from selection" on both `aria-label` and title; 36 px hit area. |
+| UX-13 footer copy | Done: "Add <name> to selection (push later)", "Allow people already sent", "Daily limit: N of M used". |
+| UX-14 history / remove | Partly: destination removal now confirms; the human-readable history list is not built (JSON log stays). |

@@ -41,8 +41,15 @@ async function getSettings(): Promise<ContentSettingsResponse> {
   return send<ContentSettingsResponse>({ type: "GET_CONTENT_SETTINGS" });
 }
 
-function destinationLabel(s: ContentSettingsResponse): string {
-  return s.hasDestination ? `Push to ${s.destinationName}` : "Push";
+function shortDest(s: ContentSettingsResponse): string | null {
+  if (!s.hasDestination || !s.destinationName) return null;
+  const n = s.destinationName.trim();
+  return n.length > 22 ? `${n.slice(0, 21)}…` : n;
+}
+function destinationLabel(s: ContentSettingsResponse, count = 0): string {
+  const d = shortDest(s);
+  if (count > 0) return d ? `Push ${count} to ${d}` : `Push ${count}`;
+  return d ? `Push to ${d}` : "Push";
 }
 
 /* ---------- page context reporting (feeds the side panel) ---------- */
@@ -73,7 +80,8 @@ let active: Mount | null = null;
 /* ---------- single-record pages (profile, Sales Nav lead) ---------- */
 
 async function setupSinglePage(pageType: PageType): Promise<Mount> {
-  const panel = mountPanel(document, "Deepline", "Push", "Select instead", "Push again");
+  const panel = mountPanel(document, "Deepline", "Loading…", "Select instead", "Push again");
+  panel.primary.disabled = true;
   let alive = true;
   const light = () => parsePage(document, location.href, { includeExperience: false, includeEducation: false, includeAbout: false }).leads[0] ?? null;
   const context = (): PageContext => {
@@ -111,7 +119,9 @@ async function setupSinglePage(pageType: PageType): Promise<Mount> {
   panel.tertiary.addEventListener("click", () => void doSend(true));
   panel.openPanel.addEventListener("click", () => void send({ type: "OPEN_SIDE_PANEL" }));
   const relabel = () => void getSettings().then((s) => {
-    if (alive) panel.primary.textContent = destinationLabel(s);
+    if (!alive) return;
+    panel.primary.textContent = destinationLabel(s);
+    panel.primary.disabled = false;
   });
   relabel();
   const onChange = (changes: Record<string, unknown>) => {
@@ -162,13 +172,24 @@ function nativeCheckbox(row: HTMLElement): HTMLInputElement | null {
 }
 
 async function setupListPage(pageType: PageType): Promise<Mount> {
-  const panel = mountPanel(document, "Deepline", "Push", "Select page", "Import search");
+  const panel = mountPanel(document, "Deepline", "Loading…", "Add all on page", "Import search");
   const rows = new Map<HTMLElement, RowState>();
   let basketKeys = new Set<string>();
   let alive = true;
   const disposers: Array<() => void> = [() => (alive = false), () => panel.dispose()];
   const savedSearchId = pageType === "salesnav_search" ? savedSearchIdFrom(location.href) : null;
   panel.tertiary.hidden = pageType !== "salesnav_search";
+  let settingsCache: ContentSettingsResponse | null = null;
+  const relabel = () => void getSettings().then((s) => {
+    if (!alive) return;
+    settingsCache = s;
+    refresh();
+  });
+  const onSettingsChange = (changes: Record<string, unknown>) => {
+    if ("settings" in changes) relabel();
+  };
+  chrome.storage.onChanged.addListener(onSettingsChange);
+  disposers.push(() => chrome.storage.onChanged.removeListener(onSettingsChange));
 
   const context = (): PageContext => ({
     pageType,
@@ -194,8 +215,8 @@ async function setupListPage(pageType: PageType): Promise<Mount> {
         r.native.checked = picked;
       }
     }
-    panel.primary.textContent = basketKeys.size ? `Push ${basketKeys.size}` : "Push";
-    panel.primary.disabled = basketKeys.size === 0;
+    panel.primary.textContent = settingsCache ? destinationLabel(settingsCache, basketKeys.size) : "Loading…";
+    panel.primary.disabled = !settingsCache || basketKeys.size === 0;
     panel.count.textContent = sel ? `${sel}/${rows.size}` : "";
     panel.count.title = `${sel} of ${rows.size} on this page selected`;
     panel.title.textContent = `Deepline · ${rows.size} on page · ${sel} selected`;
@@ -229,7 +250,7 @@ async function setupListPage(pageType: PageType): Promise<Mount> {
         const lead = parseRow(el, pageType, now);
         if (!lead) continue;
         el.classList.add("lwe-row-host");
-        const pick = makePick(document, lead.full_name);
+        const pick = makePick(document, lead.first_name ?? lead.full_name);
         const key = dedupeKey(lead);
         const st: RowState = { el, pick, key, lead, native: nativeCheckbox(el) };
         pick.addEventListener("click", (e) => {
@@ -281,14 +302,14 @@ async function setupListPage(pageType: PageType): Promise<Mount> {
       const r = await send<BasketResponse>({ type: "BASKET_REMOVE", keys: all.map((x) => x.key) });
       if (!alive) return;
       basketKeys = new Set(r.items.map((i) => i.key));
-      panel.secondary.textContent = "Select page";
+      panel.secondary.textContent = "Add all on page";
       return refresh();
     }
     const r = await send<BasketResponse & { added: number; full: boolean }>({ type: "BASKET_ADD", leads: unpicked.map((x) => x.lead), pageType, pageUrl: location.href, pageTitle: document.title });
     if (!alive) return;
     basketKeys = new Set(r.items.map((i) => i.key));
-    panel.secondary.textContent = "Unselect page";
-    panel.setStatus(r.full ? "You have 500 people selected, the maximum. Push or clear them first." : `${r.count} selected${r.pages > 1 ? ` across ${r.pages} pages` : ""}. Next page to add more, or Push.`, r.full ? "warn" : "ok");
+    panel.secondary.textContent = "Remove all on page";
+    panel.setStatus(r.full ? "You have 500 people selected, the maximum. Push or clear them first." : `${r.count} selected${r.pages > 1 ? ` across ${r.pages} pages` : ""}. Go to the next page to add more, or push now.`, r.full ? "warn" : "ok");
     refresh();
   };
 
@@ -322,6 +343,12 @@ async function setupListPage(pageType: PageType): Promise<Mount> {
   const sendSearch = async (limit?: number): Promise<void> => {
     const settings = await getSettings();
     if (!alive) return;
+    if (savedSearchId) {
+      // The panel owns the saved-search recovery flow; hand off instead of sending the rep hunting.
+      panel.setStatus("This saved search is private. Open the side panel to make it importable.", "warn");
+      void send({ type: "OPEN_SIDE_PANEL" });
+      return;
+    }
     const r = await send<{ ok: boolean; queued: boolean; duplicate: boolean; rejectedReason: string | null; detail?: string | null }>({ type: "SEARCH_CAPTURE", url: location.href, pageType, totalHint: detectTotalHint(), limit: limit ?? settings.searchDefaultLimit, searchName: searchName(location.href, pageType, document.title) });
     if (!alive) return;
     if (!r.ok) {
@@ -329,12 +356,12 @@ async function setupListPage(pageType: PageType): Promise<Mount> {
         r.rejectedReason === "no_destination"
           ? "Choose where to send first (open the panel)."
           : r.rejectedReason === "saved_search_needs_share_link"
-            ? "This is a saved search. Click Sales Navigator's “Share search” (bottom left) once, then try again."
+            ? "This saved search is private. Open the side panel to make it importable."
             : r.rejectedReason === "unsupported_by_play"
-              ? (r.detail ?? "This play does not take a search.")
-              : "Could not import this search.";
+              ? "This destination takes individual people, not whole searches. Choose a search-ready destination in the panel."
+              : "Could not start the search import.";
       panel.setStatus(why, "err");
-    } else panel.setStatus(r.duplicate ? "This search was already imported." : `Importing up to ${limit ?? settings.searchDefaultLimit} people in the background.`, r.duplicate ? "warn" : "ok");
+    } else panel.setStatus(r.duplicate ? "This search was already imported." : `Search import started (up to ${limit ?? settings.searchDefaultLimit} people). You can keep working.`, r.duplicate ? "warn" : "ok");
   };
 
   const shareSearch = (): boolean => {
@@ -352,6 +379,7 @@ async function setupListPage(pageType: PageType): Promise<Mount> {
   const b = await send<BasketResponse>({ type: "BASKET_GET" }).catch(() => ({ items: [] as BasketResponse["items"], count: 0, pages: 0 }));
   if (!alive) return { dispose: () => disposers.splice(0).forEach((d) => d()) };
   basketKeys = new Set(b.items.map((i) => i.key));
+  relabel();
   await decorate();
   // LinkedIn renders lists incrementally and on scroll; observe the results
   // container (not the whole body) for new rows, debounced.

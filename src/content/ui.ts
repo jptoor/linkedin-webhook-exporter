@@ -86,8 +86,8 @@ export function mountPanel(doc: Document, titleText: string, primaryLabel: strin
   const openPanel = doc.createElement("button");
   openPanel.type = "button";
   openPanel.className = "open";
-  openPanel.title = "Open the Deepline panel";
-  openPanel.setAttribute("aria-label", "Open the Deepline panel");
+  openPanel.title = "Open Deepline side panel";
+  openPanel.setAttribute("aria-label", "Open Deepline side panel");
   openPanel.innerHTML = OPEN_SVG;
   openPanel.setAttribute("data-lwe-action", "open-panel");
   top.append(mark, count, primary, openPanel);
@@ -163,17 +163,19 @@ export function makePick(doc: Document, name: string): HTMLButtonElement {
   b.type = "button";
   b.className = "lwe-pick";
   b.setAttribute("data-lwe-row-check", "");
-  b.setAttribute("aria-pressed", "false");
-  b.setAttribute("aria-label", `Select ${name}`);
-  b.title = "Select for Deepline";
-  b.textContent = "+";
+  b.dataset.name = name;
+  setPicked(b, false);
   return b;
 }
 
+/** Label and title always say what the next click does. */
 export function setPicked(b: HTMLButtonElement, picked: boolean): void {
+  const name = b.dataset.name ?? "this person";
   b.setAttribute("aria-pressed", picked ? "true" : "false");
   b.textContent = picked ? "✓" : "+";
-  b.title = picked ? "Selected for Deepline (click to remove)" : "Select for Deepline";
+  const label = picked ? `Remove ${name} from selection` : `Select ${name}`;
+  b.setAttribute("aria-label", label);
+  b.title = label;
   const host = b.parentElement;
   if (host) host.classList.toggle("lwe-in-basket", picked);
 }

@@ -9,6 +9,8 @@
   cursor: pointer; box-shadow: 0 1px 3px rgba(28,17,42,.18);
   transition: transform .15s cubic-bezier(.22,1,.36,1), background .15s;
 }
+/* 36px hit area around the 26px circle */
+.lwe-pick::after { content: ""; position: absolute; inset: -6px; border-radius: 50%; }
 .lwe-pick:hover { background: #EBE6F1; transform: scale(1.08); }
 .lwe-pick:focus-visible { outline: 2px solid #0a66c2; outline-offset: 2px; }
 .lwe-pick[aria-pressed="true"] { background: #1C112A; color: #fff; }

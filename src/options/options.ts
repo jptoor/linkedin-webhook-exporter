@@ -43,7 +43,7 @@ function renderDests() {
     t.className = "t";
     const n = document.createElement("span");
     n.className = "n";
-    n.textContent = `${d.favorite ? "★ " : ""}${d.name}${d.id === settings.activeDestinationId ? " · current" : ""}`;
+    n.textContent = `${d.favorite ? "★ " : ""}${d.name} · ready${d.id === settings.activeDestinationId ? " · current" : ""}`;
     const k = document.createElement("span");
     k.className = "k";
     k.textContent = d.kind === "deepline_play" ? `${d.playKey} · ${safeHost(d.baseUrl)} · ${summarizePlayInput(d.input)}` : `${d.url} · ${d.mappingPreset}, ${d.sendMode}`;
@@ -60,6 +60,7 @@ function renderDests() {
     del.className = "danger";
     del.textContent = "Remove";
     del.addEventListener("click", async () => {
+      if (!confirm(`Remove “${d.name}”? Reps will no longer be able to push to it.`)) return;
       settings = await saveSettings({ destinations: settings.destinations.filter((x) => x.id !== d.id) });
       renderDests();
     });
@@ -91,7 +92,7 @@ function openEditor(d?: Destination, kind: "deepline_play" | "webhook" = "deepli
   // Play fields
   $<HTMLInputElement>("apiKey").value = d?.kind === "deepline_play" ? d.apiKey : "";
   $<HTMLInputElement>("baseUrl").value = d?.kind === "deepline_play" ? d.baseUrl : DEFAULT_BASE_URL;
-  $("playPicked").textContent = d?.kind === "deepline_play" ? `Play: ${d.playName} (${d.playKey}) · ${summarizePlayInput(d.input)}` : "";
+  $("playPicked").textContent = d?.kind === "deepline_play" ? `Ready: ${d.playName} · ${summarizePlayInput(d.input)}` : "";
   if (d?.kind === "deepline_play") pickedPlay = { playKey: d.playKey, name: d.playName, displayName: d.playName, description: null, origin: "owned", inputSchema: null, input: d.input };
   // Webhook fields
   const w = d?.kind === "webhook" ? d : null;
@@ -168,7 +169,8 @@ async function loadPlays() {
   const r = await msg<ListPlaysResponse>({ type: "LIST_PLAYS", baseUrl, apiKey });
   if (!r.ok) return setStatus($("playsStatus"), r.error === "Deepline rejected the API key" ? "That API key was rejected." : `Could not load plays: ${r.error}`, "err");
   plays = r.plays;
-  setStatus($("playsStatus"), plays.length ? `${plays.length} plays` : "No plays found in this org.", plays.length ? "ok" : "err");
+  setStatus($("playsStatus"), plays.length ? `${plays.length} plays found` : "No plays found in this org.", plays.length ? "ok" : "err");
+  $("playsHint").hidden = !plays.length;
   renderPlays();
 }
 
@@ -195,7 +197,7 @@ function renderPlays() {
     b.addEventListener("click", () => {
       pickedPlay = p;
       if (!val("destName").trim()) $<HTMLInputElement>("destName").value = p.displayName;
-      $("playPicked").textContent = `Play: ${p.displayName} (${p.playKey}) · ${summarizePlayInput(p.input)}`;
+      $("playPicked").textContent = `Ready: ${p.displayName} · ${summarizePlayInput(p.input)}`;
       renderPlays();
     });
     box.appendChild(b);
@@ -218,7 +220,7 @@ $("saveDest").addEventListener("click", async () => {
   settings = await saveSettings({ destinations: [...others, dest], activeDestinationId: settings.activeDestinationId ?? dest.id });
   renderDests();
   closeEditor();
-  setStatus($("status"), `Saved “${dest.name}”.`, "ok");
+  setStatus($("status"), `Ready to push to “${dest.name}”.`, "ok");
 });
 
 $("testDest").addEventListener("click", async () => {

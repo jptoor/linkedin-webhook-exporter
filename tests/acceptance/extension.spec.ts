@@ -32,6 +32,11 @@ const status = (p: Page) => p.locator("[data-lwe-status]");
 const push = (p: Page) => p.locator('[data-lwe-action="send"]');
 const selectPage = (p: Page) => p.locator('[data-lwe-action="select-all"]');
 const pills = (p: Page) => p.locator("[data-lwe-row-check]");
+/** The dock mounts as "Loading…" until it knows the destination; click only once it does. */
+const clickPush = async (p: Page) => {
+  await expect(push(p)).not.toHaveText("Loading…");
+  await push(p).click();
+};
 const PAGED = (n = 1) => `${site.origin}/sales/search/people?query=paged&page=${n}&sessionId=abc`;
 
 /* AT-01 */
@@ -41,7 +46,7 @@ test("profile page: one click pushes a signed, well-formed lead.captured payload
   await page.goto(`${site.origin}/in/jane-doe-123/`);
   await expect(dock(page)).toBeVisible();
   await expect(push(page)).toHaveText("Push to Hook");
-  await push(page).click();
+  await clickPush(page);
   await expect(status(page)).toHaveText(/1 on the way/);
 
   const [req] = await hook.waitFor(1);
@@ -74,11 +79,11 @@ test("dedupe: the same profile is not pushed twice unless the rep asks", async (
   await configure(context, extensionId, { url: hook.url, signingSecret: SECRET });
   const page = await context.newPage();
   await page.goto(`${site.origin}/in/jane-doe-123/`);
-  await push(page).click();
+  await clickPush(page);
   await expect(status(page)).toHaveText(/1 on the way/);
   await hook.waitFor(1);
 
-  await push(page).click();
+  await clickPush(page);
   await expect(status(page)).toHaveText(/pushed before/);
   await page.waitForTimeout(500);
   expect(hook.received).toHaveLength(1);
@@ -101,9 +106,9 @@ test("Sales Navigator search: pick two people with the row pills and push; one r
   await pills(page).nth(0).click();
   await pills(page).nth(1).click();
   await expect(pills(page).nth(1)).toHaveAttribute("aria-pressed", "true");
-  await expect(push(page)).toHaveText("Push 2");
+  await expect(push(page)).toHaveText("Push 2 to Hook");
   await expect(page.locator("[data-lwe-count]")).toHaveText("2/3");
-  await push(page).click();
+  await clickPush(page);
   await expect(status(page)).toHaveText(/2 on the way/);
 
   const reqs = await hook.waitFor(2);
@@ -128,8 +133,8 @@ test("batch mode + flat preset: select the page and push one request with rows[]
   await page.goto(`${site.origin}/search/results/people/?keywords=sales`);
   await expect(pills(page)).toHaveCount(2); // anonymous "LinkedIn Member" row excluded
   await selectPage(page).click();
-  await expect(push(page)).toHaveText("Push 2");
-  await push(page).click();
+  await expect(push(page)).toHaveText("Push 2 to Hook");
+  await clickPush(page);
   const [req] = await hook.waitFor(1);
   expect(req.json.event).toBe("leads.captured");
   expect(req.json.rows).toHaveLength(2);
@@ -145,7 +150,7 @@ test("deepline preset: flat row keyed by Deepline field names", async () => {
   await configure(context, extensionId, { url: hook.url, signingSecret: SECRET, mappingPreset: "deepline" });
   const page = await context.newPage();
   await page.goto(`${site.origin}/in/jane-doe-123/`);
-  await push(page).click();
+  await clickPush(page);
   const [req] = await hook.waitFor(1);
   expect(Object.keys(req.json).slice(0, 4)).toEqual(["schema_version", "event", "event_id", "sent_at"]);
   expect(Object.keys(req.json).slice(4, 9)).toEqual(["linkedin_url", "first_name", "last_name", "title", "company_name"]);
@@ -161,7 +166,7 @@ test("standard webhooks scheme: webhook-id/timestamp/signature verify with a whs
   await configure(context, extensionId, { url: hook.url, signingSecret: secret, signatureScheme: "standard", mappingPreset: "deepline" });
   const page = await context.newPage();
   await page.goto(`${site.origin}/in/jane-doe-123/`);
-  await push(page).click();
+  await clickPush(page);
   const [req] = await hook.waitFor(1);
   expect(req.headers["x-lwe-signature"]).toBeUndefined();
   const id = req.headers["webhook-id"];
@@ -176,7 +181,7 @@ test("retry: a 503 is retried with backoff and the identical body is re-signed",
   hook.failNext = [503];
   const page = await context.newPage();
   await page.goto(`${site.origin}/in/jane-doe-123/`);
-  await push(page).click();
+  await clickPush(page);
   await hook.waitFor(1);
   let storage = await readStorage(context, extensionId);
   const item = storage.queue.find((q: any) => q.attempts === 1);
@@ -200,7 +205,7 @@ test("a 401 is not retried and shows as Failed in the side panel with a retry li
   hook.failNext = [401];
   const page = await context.newPage();
   await page.goto(`${site.origin}/in/jane-doe-123/`);
-  await push(page).click();
+  await clickPush(page);
   await hook.waitFor(1);
   await page.waitForTimeout(300);
   const storage = await readStorage(context, extensionId);
@@ -217,16 +222,16 @@ test("daily cap blocks pushes beyond the limit; what was refused stays selected"
   await page.goto(`${site.origin}/sales/search/people`);
   await expect(pills(page)).toHaveCount(3);
   await selectPage(page).click();
-  await expect(push(page)).toHaveText("Push 3");
-  await push(page).click();
+  await expect(push(page)).toHaveText("Push 3 to Hook");
+  await clickPush(page);
   await expect(status(page)).toHaveText(/hit today’s limit/);
   await page.waitForTimeout(300);
   expect(hook.received).toHaveLength(0);
-  await expect(push(page)).toHaveText("Push 3"); // still selected
+  await expect(push(page)).toHaveText("Push 3 to Hook"); // still selected
   await selectPage(page).click(); // unselect page
   await expect(push(page)).toBeDisabled();
   await pills(page).first().click();
-  await push(page).click();
+  await clickPush(page);
   await expect(status(page)).toHaveText(/1 on the way · 1 left today/);
 });
 
@@ -234,7 +239,7 @@ test("daily cap blocks pushes beyond the limit; what was refused stays selected"
 test("nothing connected: the push is refused with guidance and nothing leaves the browser", async () => {
   const page = await context.newPage();
   await page.goto(`${site.origin}/in/jane-doe-123/`);
-  await push(page).click();
+  await clickPush(page);
   await expect(status(page)).toHaveText(/Choose where to send first/);
   expect(hook.received).toHaveLength(0);
   expect(dl.runs).toHaveLength(0);
@@ -253,9 +258,9 @@ test("settings: connecting a webhook rejects plain http and accepts localhost", 
   await page.fill("#url", hook.url);
   await page.fill("#destName", "My hook");
   await page.click("#saveDest");
-  await expect(page.locator("#status")).toHaveText(/Saved “My hook”/);
+  await expect(page.locator("#status")).toHaveText(/Ready to push to “My hook”/);
   await expect(page.locator("#dests li")).toHaveCount(1);
-  await expect(page.locator("#dests li .n")).toContainText("My hook · current");
+  await expect(page.locator("#dests li .n")).toContainText("My hook · ready · current");
 });
 
 /* AT-11 */
@@ -299,17 +304,17 @@ test("picks survive moving between result pages and push as one import", async (
   await expect(pills(page)).toHaveCount(25);
   await pills(page).nth(0).click();
   await pills(page).nth(1).click();
-  await expect(push(page)).toHaveText("Push 2");
+  await expect(push(page)).toHaveText("Push 2 to Hook");
   await page.goto(PAGED(2));
   await expect(pills(page)).toHaveCount(25);
-  await expect(push(page)).toHaveText("Push 2"); // still counting page 1
+  await expect(push(page)).toHaveText("Push 2 to Hook"); // still counting page 1
   await pills(page).nth(3).click();
   await pills(page).nth(4).click();
-  await expect(push(page)).toHaveText("Push 4");
+  await expect(push(page)).toHaveText("Push 4 to Hook");
   await expect(page.locator("[data-lwe-count]")).toHaveText("2/25");
   await page.goto(PAGED(1));
   await expect(pills(page).nth(0)).toHaveAttribute("aria-pressed", "true"); // page 1 picks remembered
-  await push(page).click();
+  await clickPush(page);
   await expect(status(page)).toHaveText(/4 on the way/);
   const reqs = await hook.waitFor(4);
   expect(new Set(reqs.map((r) => r.json.import.import_id)).size).toBe(1);
@@ -327,10 +332,11 @@ test("Sales Navigator's own checkboxes select people too, and unticking removes 
   await expect(pills(page)).toHaveCount(3);
   await page.locator("input.row-select").nth(0).check();
   await page.locator("input.row-select").nth(2).check();
-  await expect(push(page)).toHaveText("Push 2");
+  await expect(push(page)).toHaveText("Push 2 to Hook");
   await expect(pills(page).nth(2)).toHaveAttribute("aria-pressed", "true");
+  await expect(pills(page).nth(2)).toHaveAttribute("aria-label", /Remove .* from selection/);
   await page.locator("input.row-select").nth(0).uncheck();
-  await expect(push(page)).toHaveText("Push 1");
+  await expect(push(page)).toHaveText("Push 1 to Hook");
   // and our pill keeps LinkedIn's box in sync
   await pills(page).nth(1).click();
   await expect(page.locator("input.row-select").nth(1)).toBeChecked();
@@ -348,7 +354,7 @@ test("side panel: shows the picked people, lets the rep drop one, and the pinned
   await panel.click("#addAll");
   await expect(panel.locator("#people .person")).toHaveCount(3);
   await expect(panel.locator("#cta")).toHaveText("Push 3 people to Warm intro");
-  await expect(panel.locator("#listTitle")).toHaveText("Selected · 3");
+  await expect(panel.locator("#listTitle")).toHaveText("3 selected");
   await panel.locator("#people .person").filter({ hasText: "Bob Okafor" }).locator("button").click();
   await expect(panel.locator("#people .person")).toHaveCount(2);
   await expect(page.locator("[data-lwe-count]")).toHaveText("2/3");
@@ -389,7 +395,7 @@ test("play with leads[]: a page of people becomes one run carrying every row and
   await page.goto(`${site.origin}/sales/search/people?query=cro`);
   await expect(pills(page)).toHaveCount(3);
   await selectPage(page).click();
-  await push(page).click();
+  await clickPush(page);
   await expect(status(page)).toHaveText(/3 on the way/);
   const [run] = await dl.waitForRuns(1);
   expect(run.json.name).toBe("acme/linkedin-capture");
@@ -406,7 +412,7 @@ test("a play that only takes searches refuses people with a plain explanation, b
   await setSettings(context, extensionId, { destinations: [play], activeDestinationId: "play" });
   const page = await context.newPage();
   await page.goto(`${site.origin}/in/jane-doe-123/`);
-  await push(page).click();
+  await clickPush(page);
   await expect(status(page)).toHaveText(/does not take people/);
   await page.waitForTimeout(300);
   expect(dl.runs).toHaveLength(0);
@@ -424,14 +430,14 @@ test("settings: connecting a play lists the org's plays from the API, rejects a 
   await expect(page.locator("#playsStatus")).toHaveText(/rejected/);
   await page.fill("#apiKey", dl.apiKey);
   await page.click("#loadPlays");
-  await expect(page.locator("#playsStatus")).toHaveText(/4 plays/);
+  await expect(page.locator("#playsStatus")).toHaveText(/4 plays found/);
   await expect(page.locator("#plays button")).toHaveCount(4);
   await expect(page.locator("#plays button").first()).toContainText("LinkedIn capture"); // owned first, alphabetical
   await page.locator('#plays button[data-lwe-play="acme/salesnav-search-import"]').click();
   await expect(page.locator("#playPicked")).toContainText("searches · one run per lead");
   await expect(page.locator("#destName")).toHaveValue("Sales Navigator search import");
   await page.click("#saveDest");
-  await expect(page.locator("#dests li .n")).toContainText("Sales Navigator search import · current");
+  await expect(page.locator("#dests li .n")).toContainText("Sales Navigator search import · ready · current");
   const storage = await readStorage(context, extensionId);
   expect(storage.settings.destinations[0]).toMatchObject({ kind: "deepline_play", playKey: "acme/salesnav-search-import", apiKey: dl.apiKey, input: { mode: "mapped", acceptsSearch: true, acceptsLeads: false, required: ["search_url"] } });
   expect(dl.lists).toBeGreaterThanOrEqual(2);
@@ -451,7 +457,8 @@ test("import search: the side panel hands the search URL and a limit to the play
   await expect(panel.locator("#searchLimit")).toHaveValue("100");
   await panel.fill("#searchLimit", "40");
   await panel.click("#sendSearch");
-  await expect(panel.locator("#searchNote")).toHaveText(/Importing up to 40 people/);
+  await expect(panel.locator("#searchNote")).toHaveText(/Search import started: up to 40 people/);
+  await expect(panel.locator("#cta")).toHaveText(/Search import started/);
   const [run] = await dl.waitForRuns(1);
   expect(run.json.name).toBe("acme/salesnav-search-import");
   expect(run.json.input).toEqual({ search_url: `${site.origin}/sales/search/people?query=paged`, limit: 40, search_name: "paged", imported_by: "tester" });
@@ -468,7 +475,7 @@ test("import search to a webhook: one signed search.captured event with filters,
   const page = await context.newPage();
   await page.goto(`${site.origin}/sales/search/people?query=(keywords%3Acro%2Cfilters%3AList((type%3AREGION%2Cvalues%3AList((text%3AUnited%20States%2CselectionType%3AINCLUDED)))))&sessionId=zzz`);
   await page.locator('[data-lwe-action="tertiary"]').click(); // "Import search" on the dock
-  await expect(status(page)).toHaveText(/Importing up to 100 people/);
+  await expect(status(page)).toHaveText(/Search import started \(up to 100 people\)/);
   await expect.poll(() => hook.searches.length).toBe(1);
   const s = hook.searches[0].json;
   expect(s.event).toBe("search.captured");
@@ -486,7 +493,7 @@ test("saved search: import waits for Sales Navigator's share link, then sends th
   await page.goto(`${site.origin}/sales/search/people?savedSearchId=1898568618&sessionId=Q`);
   await expect(pills(page)).toHaveCount(3);
   const panel = await openPanelFor(context, extensionId, page);
-  await expect(panel.locator("#savedNote")).toBeVisible();
+  await expect(panel.locator("#savedNote")).toContainText("This saved search is private");
   await expect(panel.locator("#sendSearch")).toBeDisabled();
   // Sales Navigator's "Share search" copies the shareable link; the MAIN-world hook catches it.
   await page.evaluate(() => navigator.clipboard.writeText("https://www.linkedin.com/sales/search/people?query=(keywords%3Ainvestor)&sessionId=R").catch(() => undefined));
@@ -527,7 +534,7 @@ test("a lead list: select the page, push, messy names and hostile hosts handled,
   await page.goto(`${site.origin}/sales/lists/people/7263`);
   await expect(pills(page)).toHaveCount(12);
   await selectPage(page).click();
-  await push(page).click();
+  await clickPush(page);
   const reqs = await hook.waitFor(12);
   const names = reqs.map((r) => r.json.lead.full_name);
   expect(names).toContain("Bob Okafor");
@@ -543,7 +550,7 @@ test("2026-layout profile and people search push well-formed records with warnin
   await configure(context, extensionId, { url: hook.url, signingSecret: SECRET, dailyCap: 2500 });
   const page = await context.newPage();
   await page.goto(`${site.origin}/in/zoe-angstrom-%C3%A5/`);
-  await push(page).click();
+  await clickPush(page);
   const [zoe] = await hook.waitFor(1);
   expect(zoe.json.lead).toMatchObject({ full_name: "Zoë Ångström", title: "Chief Revenue Officer", company_name: "Ångström & Sons", location: "Stockholm, Stockholm County, Sweden", connection_degree: "2nd" });
   expect(zoe.json.lead.parse_warnings).toContain("sdui_layout");
@@ -551,7 +558,7 @@ test("2026-layout profile and people search push well-formed records with warnin
   await page.goto(`${site.origin}/search/results/people/?keywords=chief%20revenue%20officer`);
   await expect(pills(page)).toHaveCount(9);
   await selectPage(page).click();
-  await push(page).click();
+  await clickPush(page);
   const reqs = await hook.waitFor(10);
   const cher = reqs.find((r) => r.json.lead.full_name === "Cher")!.json.lead;
   expect(cher).toMatchObject({ first_name: "Cher", last_name: null, location: "Mount Pleasant, South Carolina, United States", title: "Chief Revenue Officer (CRO)" });
@@ -565,9 +572,9 @@ test("every action is logged automatically and secrets never appear in the log, 
   await setSettings(context, extensionId, { destinations: [webhookDestination({ url: hook.url, signingSecret: "super-secret-value", authHeaderName: "Authorization", authHeaderValue: "Bearer token-value" }), play], activeDestinationId: "hook" });
   const page = await context.newPage();
   await page.goto(`${site.origin}/in/jane-doe-123/`);
-  await push(page).click();
+  await clickPush(page);
   await hook.waitFor(1);
-  await push(page).click(); // duplicate -> logged as skipped
+  await clickPush(page); // duplicate -> logged as skipped
   await expect(status(page)).toHaveText(/pushed before/);
   await pills(page).count();
   const entries = (await sendMessage(context, extensionId, { type: "GET_LOG", limit: 100 })) as Array<{ kind: string; msg: string }>;
@@ -602,16 +609,16 @@ test("the daily cap holds across tabs: the second page's push is refused whole a
   await a.goto(PAGED(1));
   await expect(pills(a)).toHaveCount(25);
   await selectPage(a).click();
-  await push(a).click();
+  await clickPush(a);
   await expect(status(a)).toHaveText(/25 on the way/);
   await hook.waitFor(25);
   const b = await context.newPage();
   await b.goto(PAGED(2));
   await expect(pills(b)).toHaveCount(25);
   await selectPage(b).click();
-  await push(b).click();
+  await clickPush(b);
   await expect(status(b)).toHaveText(/hit today’s limit \(5 left\)/);
-  await expect(push(b)).toHaveText("Push 25");
+  await expect(push(b)).toHaveText("Push 25 to Hook");
   const st = await sendMessage(context, extensionId, { type: "GET_STATE" });
   expect(st).toMatchObject({ sentToday: 25, basketCount: 25 });
   expect(hook.leads.length).toBe(25);

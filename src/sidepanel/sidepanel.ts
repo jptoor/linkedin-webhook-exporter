@@ -11,6 +11,9 @@ let state: StateResponse | null = null;
 let basket: BasketResponse = { items: [], count: 0, pages: 0 };
 let context: PageContext | null = null;
 let activeTabId: number | null = null;
+/** When a search import was last started, so the pinned bar can say so. */
+let searchImportStartedAt = 0;
+let searchImportDest = "";
 
 /* ---------- helpers ---------- */
 
@@ -90,6 +93,7 @@ function renderDest() {
   const btn = $("destBtn");
   btn.classList.toggle("empty", !d);
   $("destName").textContent = d ? d.name : state?.settings.destinations.length ? "Choose a play" : "Connect a play";
+  $("firstRun").hidden = !state || state.settings.destinations.length > 0;
 }
 
 let sheetQuery = "";
@@ -161,8 +165,25 @@ function openSheet() {
   $<HTMLInputElement>("sheetSearch").focus();
 }
 function closeSheet() {
+  if ($("sheet").hidden) return;
   $("sheet").hidden = true;
+  $("destBtn").focus();
 }
+/** Keep keyboard focus inside the open sheet. */
+$("sheet").addEventListener("keydown", (e) => {
+  if (e.key !== "Tab") return;
+  const focusables = Array.from($("sheet").querySelectorAll<HTMLElement>("button, input")).filter((el) => !el.hidden && el.offsetParent !== null);
+  if (!focusables.length) return;
+  const first = focusables[0];
+  const last = focusables[focusables.length - 1];
+  if (e.shiftKey && document.activeElement === first) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault();
+    first.focus();
+  }
+});
 
 /* ---------- page ---------- */
 
@@ -181,19 +202,21 @@ function renderPage() {
     $("leadName").textContent = lead?.full_name ?? "Reading the page…";
     $("leadMeta").textContent = lead ? [lead.title, lead.company_name].filter(Boolean).join(" · ") + (lead.location ? ` · ${lead.location}` : "") : "";
     $<HTMLButtonElement>("addCurrent").disabled = !lead;
+    $("addCurrent").textContent = lead ? `Add ${lead.first_name ?? lead.full_name} to selection (push later)` : "Add to selection (push later)";
   }
   if (list && ctx) {
     const onPage = ctx.selectedOnPage;
-    $("listTitle").textContent = basket.count ? `Selected · ${basket.count}${basket.pages > 1 ? ` from ${basket.pages} pages` : ""}` : "Selected people";
-    $("addAll").textContent = ctx.rowsOnPage && onPage >= ctx.rowsOnPage ? "Unselect this page" : `Select this page${ctx.rowsOnPage ? ` (${ctx.rowsOnPage})` : ""}`;
+    $("listTitle").textContent = basket.count ? `${basket.count} selected${basket.pages > 1 ? ` across ${basket.pages} pages` : ""}` : "Selected people";
+    $("addAll").textContent = ctx.rowsOnPage && onPage >= ctx.rowsOnPage ? `Remove all ${ctx.rowsOnPage} on this page` : `Add all${ctx.rowsOnPage ? ` ${ctx.rowsOnPage}` : ""} on this page`;
     $("clearAll").hidden = basket.count === 0;
     $("listTeach").hidden = basket.count > 0;
     const isSearch = ctx.pageType === "salesnav_search";
     if (isSearch) {
       const d = activeDest();
       const can = !!d && (d.kind === "webhook" || d.input.acceptsSearch);
-      $("searchTitle").textContent = ctx.searchName ? `Import everyone from “${ctx.searchName.slice(0, 60)}${ctx.searchName.length > 60 ? "…" : ""}”` : "Import everyone from this search";
-      $("searchBlurb").textContent = d ? `${d.name} fetches the members in the background. No clicking through pages.` : "Choose where to send first.";
+      const lim = Number($<HTMLInputElement>("searchLimit").value) || state?.settings.searchDefaultLimit || 100;
+      $("searchTitle").textContent = ctx.searchName ? `Import up to ${lim} people from “${ctx.searchName.slice(0, 60)}${ctx.searchName.length > 60 ? "…" : ""}”` : `Import up to ${lim} people from this search`;
+      $("searchBlurb").textContent = d ? `${d.name} will fetch matching people in the background. You can keep working in LinkedIn.` : "Choose where to send first.";
       $<HTMLButtonElement>("sendSearch").disabled = !can || (!!ctx.savedSearchId && !ctx.shareUrl);
       $("savedNote").hidden = !ctx.savedSearchId || !!ctx.shareUrl;
       $("shareOk").hidden = !ctx.shareUrl;
@@ -201,7 +224,7 @@ function renderPage() {
       // ("Importing up to 40 people…") must survive re-renders.
       const sn = $("searchNote");
       if (d && !can) {
-        note(sn, `${d.name} does not take a search. Pick a play with a search URL input, or select people instead.`, "warn");
+        note(sn, `${d.name} can receive individual people, not whole searches. Choose a search-ready destination, or select people one by one.`, "warn");
         sn.dataset.derived = "1";
       } else if (sn.dataset.derived) {
         note(sn, null);
@@ -247,10 +270,15 @@ function renderCta() {
   const cta = $<HTMLButtonElement>("cta");
   const d = activeDest();
   const single = context?.pageType === "profile" || context?.pageType === "salesnav_lead";
+  const importing = Date.now() - searchImportStartedAt < 20_000;
   if (!d) {
     cta.textContent = "Choose where to send";
     cta.disabled = false;
     cta.dataset.mode = "choose";
+  } else if (basket.count === 0 && !(single && context?.lead) && importing) {
+    cta.textContent = `Search import started for ${searchImportDest || destLabel(d)}`;
+    cta.disabled = true;
+    cta.dataset.mode = "none";
   } else if (basket.count > 0) {
     cta.textContent = `Push ${pluralPeople(basket.count)} to ${destLabel(d)}`;
     cta.disabled = false;
@@ -266,7 +294,7 @@ function renderCta() {
   }
   if (state) {
     $("sentToday").textContent = String(state.sentToday);
-    $("remaining").textContent = String(state.remainingToday);
+    $("capTotal").textContent = String(state.settings.dailyCap);
   }
 }
 
@@ -398,12 +426,14 @@ $<HTMLInputElement>("sheetSearch").addEventListener("input", (e) => {
 });
 $("sheetAdd").addEventListener("click", () => chrome.runtime.openOptionsPage());
 $("options").addEventListener("click", () => chrome.runtime.openOptionsPage());
+$("firstRunSettings").addEventListener("click", () => chrome.runtime.openOptionsPage());
+$<HTMLInputElement>("searchLimit").addEventListener("input", renderPage);
 $("openLog").addEventListener("click", () => chrome.tabs.create({ url: chrome.runtime.getURL("options.html#log") }));
 
 $("addCurrent").addEventListener("click", async () => {
   if (!context?.lead || !context.pageType) return;
   const r = await msg<BasketResponse & { added: number }>({ type: "BASKET_ADD", leads: [context.lead], pageType: context.pageType, pageUrl: context.url, pageTitle: context.title });
-  note($("leadNote"), r.added ? `Added. ${pluralPeople(r.count)} selected so far.` : "Already selected.", r.added ? "ok" : "info");
+  note($("leadNote"), r.added ? `${context.lead.first_name ?? context.lead.full_name} added. ${pluralPeople(r.count)} ready to push.` : "Already selected.", r.added ? "ok" : "info");
   await refreshBasket(r);
 });
 $("addSelected").addEventListener("click", async () => {
@@ -416,7 +446,7 @@ $("addAll").addEventListener("click", async () => {
 });
 $("clearAll").addEventListener("click", async () => refreshBasket(await msg<BasketResponse>({ type: "BASKET_CLEAR" })));
 $("getShare").addEventListener("click", async () => {
-  note($("searchNote"), "Asking Sales Navigator for the link…", "info");
+  note($("searchNote"), "Getting a shareable link from Sales Navigator…", "info");
   await pageAction("share_search");
   setTimeout(() => void loadContext(), 1200);
 });
@@ -424,11 +454,18 @@ $("sendSearch").addEventListener("click", async () => {
   if (!context?.pageType) return;
   const limit = Math.max(1, Math.min(2500, Number($<HTMLInputElement>("searchLimit").value) || 100));
   $<HTMLButtonElement>("sendSearch").disabled = true;
-  note($("searchNote"), "Sending the search…", "info");
+  note($("searchNote"), "Starting the search import…", "info");
   const r = await msg<SearchCaptureResponse>({ type: "SEARCH_CAPTURE", url: context.url, pageType: context.pageType, totalHint: context.totalHint, limit, searchName: context.searchName, savedSearchId: context.savedSearchId, force: $<HTMLInputElement>("force").checked });
   $<HTMLButtonElement>("sendSearch").disabled = false;
-  if (r.ok) note($("searchNote"), r.duplicate ? "This search was already imported. Tick “resend duplicates” to import again." : `Importing up to ${limit} people. Results land in ${destLabel(activeDest())}.`, r.duplicate ? "warn" : "ok");
-  else if (r.rejectedReason === "saved_search_needs_share_link") note($("searchNote"), "Get the shareable link first (above).", "warn");
+  if (r.ok && !r.duplicate) {
+    searchImportStartedAt = Date.now();
+    searchImportDest = destLabel(activeDest());
+    note($("searchNote"), `Search import started: up to ${limit} people are being fetched for ${searchImportDest}. You can keep working.`, "ok");
+    ctaStatus(`Search import started for ${searchImportDest}.`, "ok");
+    renderCta();
+    setTimeout(renderCta, 21_000);
+  } else if (r.ok) note($("searchNote"), "This search was already imported. Tick “Allow people already sent” to import it again.", "warn");
+  else if (r.rejectedReason === "saved_search_needs_share_link") note($("searchNote"), "This saved search is private. Get the shareable link first (above).", "warn");
   else note($("searchNote"), r.detail ?? whyNot({ ok: false, queued: 0, skippedDuplicates: [], rejectedReason: r.rejectedReason as CaptureResponse["rejectedReason"], remainingToday: state?.remainingToday ?? 0 }), "err");
   await refreshState();
 });

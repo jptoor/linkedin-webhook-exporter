@@ -80,12 +80,13 @@
 
   <h2>Where your people go</h2>
   <ul id="dests" class="dests"></ul>
-  <div class="actions"><button id="addDest" class="primary" type="button">Connect a play</button><button id="addWebhook" type="button">Connect a webhook</button></div>
+  <div class="small muted" style="margin-top:8px">Not sure which one? Ask your RevOps admin which destination your team uses.</div>
+  <div class="actions"><button id="addDest" class="primary" type="button">Use a Deepline play</button><button id="addWebhook" type="button">Send to another tool</button></div>
 
   <div id="editor" class="editor" hidden>
     <div class="kinds">
       <button id="kindPlay" type="button" aria-pressed="true"><b>Deepline play</b><span>Runs a play in your Deepline org for each person or search.</span></button>
-      <button id="kindWebhook" type="button" aria-pressed="false"><b>Webhook</b><span>Posts JSON to any URL: Clay, Zapier, your own server.</span></button>
+      <button id="kindWebhook" type="button" aria-pressed="false"><b>Another tool (webhook)</b><span>Posts JSON to any URL: Clay, Zapier, your own server.</span></button>
     </div>
 
     <div id="playFields">
@@ -96,7 +97,8 @@
         <label for="baseUrl">Deepline address</label>
         <input id="baseUrl" type="url" value="https://code.deepline.com">
       </details>
-      <div class="actions"><button id="loadPlays" type="button">Load my plays</button><span id="playsStatus" class="status"></span></div>
+      <div class="actions"><button id="loadPlays" type="button">Find my plays</button><span id="playsStatus" class="status"></span></div>
+      <div id="playsHint" class="small muted" hidden>Choose the play to send people to:</div>
       <div id="plays" class="plays" hidden></div>
       <div id="playPicked" class="small muted" style="margin-top:6px"></div>
     </div>
@@ -136,7 +138,7 @@
     <label for="destName">Name (what reps see)</label>
     <input id="destName" type="text" placeholder="e.g. Warm intro">
     <div class="actions">
-      <button id="saveDest" class="primary" type="button">Save</button>
+      <button id="saveDest" class="primary" type="button">Use this destination</button>
       <button id="testDest" type="button">Test connection</button>
       <button id="cancelDest" class="link" type="button">Cancel</button>
       <span id="destStatus" class="status"></span>
@@ -154,7 +156,7 @@
     <div><label for="dedupeTtlDays">Remember pushed people for (days)</label><input id="dedupeTtlDays" type="number" min="1" max="365"></div>
   </div>
   <label class="check"><input id="dedupe" type="checkbox"> Skip people already pushed</label>
-  <div class="warn">LinkedIn restricts accounts that pull too many profiles too fast. 50 to 100 people a day is the community rule of thumb; the default is 100. Whole-search imports run on Deepline’s side and do not count here.</div>
+  <div class="warn">These limits help you control volume; they do not make LinkedIn activity compliant or prevent account restrictions. LinkedIn restricts accounts that pull too many profiles too fast; the default is 100 a day. Search imports run on Deepline’s side and do not count here.</div>
 
   <details style="margin-top:22px"><summary>More options</summary>
     <label class="check"><input id="includeExperience" type="checkbox"> Include work history (profile pages)</label>
