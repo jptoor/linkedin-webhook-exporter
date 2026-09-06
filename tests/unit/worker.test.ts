@@ -18,7 +18,7 @@ let fake: ReturnType<typeof makeFakeChrome>;
 let send: ReturnType<typeof messenger>;
 let fetchMock: ReturnType<typeof vi.fn>;
 
-async function boot(settings: Record<string, unknown> = {}) {
+async function boot(settings: Record<string, unknown> = {}, prepare?: () => void) {
   vi.resetModules();
   fake = makeFakeChrome();
   (globalThis as any).chrome = fake.chrome;
@@ -27,6 +27,7 @@ async function boot(settings: Record<string, unknown> = {}) {
   fetchMock = vi.fn(async () => new Response("ok", { status: 200 }));
   (globalThis as any).fetch = fetchMock;
   fake.store.settings = { destinations: [WEBHOOK, PLAY], activeDestinationId: "w1", dailyCap: 100, dedupe: true, ...settings };
+  prepare?.();
   await import("../../src/background/service-worker");
   send = messenger(fake.listeners);
   await new Promise((r) => setTimeout(r, 20));
@@ -441,5 +442,157 @@ describe("Deepline sign-in (session) and the web app channel", () => {
     expect(fetchMock.mock.calls.slice(before).some(([u]) => String(u).includes("segment"))).toBe(false);
     expect(log().some((e) => e.kind === "telemetry.event" && e.msg === "Event: push_queued")).toBe(false); // no destination: nothing queued
     expect(log().some((e) => e.kind === "telemetry.event")).toBe(true); // signed_in was recorded
+  });
+});
+
+describe("Connect Deepline (device key, like `deepline auth register`)", () => {
+  const KEY = "dl_device_key_123";
+  const TOK = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const CLAIM_URL = `https://code.deepline.com/api/v2/auth/cli/claim/${TOK}`;
+  // Live shapes (verified against code.deepline.com): register, pending, claimed.
+  const REGISTER = { claim_url: CLAIM_URL, claim_token: TOK, claim_expires_at: new Date(Date.now() + 24 * 3600_000).toISOString(), rate_limit_tier: "unclaimed", cli_message: "Nice! Approve access in your browser." };
+  const PENDING = { status: "pending", rate_limit_tier: "unclaimed", api_key_id: "key_9", user_id: null, user_email: null, org_id: null, org_name: null, org_slug: null };
+  const CLAIMED = { status: "claimed", api_key: KEY, api_key_id: "key_9", user_id: "u9", user_email: "rep@acme.com", org_id: "org_9", org_name: "Acme", org_slug: "acme" };
+  /** Replies for claim polls, consumed in order; then pending forever. */
+  let claimReplies: Array<{ status: number; body?: unknown }>;
+  let keyRevoked = false;
+  const deviceFetch = async (url: string, init?: RequestInit) => {
+    const u = String(url);
+    const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+    if (u.endsWith("/api/v2/auth/cli/register")) return new Response(JSON.stringify(REGISTER), { status: 200 });
+    if (u.endsWith("/api/v2/auth/cli/status") && body.claim_token) {
+      const r = claimReplies.shift() ?? { status: 200, body: PENDING };
+      return new Response(JSON.stringify(r.body ?? {}), { status: r.status });
+    }
+    if (u.endsWith("/api/v2/auth/cli/status") && body.api_key) return keyRevoked ? new Response("{}", { status: 401 }) : new Response(JSON.stringify({ ...CLAIMED, api_key: undefined, status: "active" }), { status: 200 });
+    if (u.endsWith("/api/v2/auth/session")) return new Response(JSON.stringify({ session: null }), { status: 200 });
+    if (u.includes("/api/v2/plays?")) return new Response(JSON.stringify({ plays: u.includes("owned") ? [{ playKey: "acme/warm-intro", name: "warm-intro", displayName: "Warm intro", inputSchema: { properties: { linkedin_url: {} } } }] : [] }), { status: 200 });
+    if (u.endsWith("/api/v2/plays/run")) return new Response(JSON.stringify({ workflowId: "wf_k" }), { status: 202 });
+    return new Response("{}", { status: 200 });
+  };
+  const authChanges = () => fake.broadcasts.filter((m: any) => m.type === "AUTH_CHANGED") as any[];
+  /** Everything an extension page, the log or session storage could expose. */
+  const everything = () => JSON.stringify([fake.broadcasts, log(), fake.sessionStore, { ...fake.store, connection: null }]);
+  beforeEach(async () => {
+    claimReplies = [];
+    keyRevoked = false;
+    await boot({ destinations: [], activeDestinationId: null });
+    fetchMock.mockImplementation(deviceFetch);
+  });
+
+  it("registers the device, opens the claim page, polls until claimed, and stores the key where no page can read it", async () => {
+    claimReplies = [{ status: 200, body: PENDING }, { status: 200, body: CLAIMED }];
+    expect(await send({ type: "CONNECT" }, PANEL)).toEqual({ ok: true, error: null });
+    const reg = fetchMock.mock.calls.find(([u]) => String(u).endsWith("/auth/cli/register"))!;
+    expect(JSON.parse(String((reg[1] as RequestInit).body))).toEqual({ agent_name: "Chrome extension: Deepline for LinkedIn" });
+    expect(reg[1] as RequestInit).toMatchObject({ method: "POST", credentials: "omit", redirect: "error" });
+    expect(((reg[1] as RequestInit).headers as Record<string, string>)["X-Deepline-Client-Family"]).toBe("chrome-extension");
+    expect(Array.from(fake.tabs.values()).some((t) => t.url === CLAIM_URL)).toBe(true); // the tab follows the 307 to the approval page
+    expect(fake.sessionStore.claim).toMatchObject({ claimToken: TOK, baseUrl: "https://code.deepline.com", expiresAt: Date.parse(REGISTER.claim_expires_at) });
+    expect(fake.alarms.has("lwe-claim")).toBe(true);
+    expect(await send({ type: "GET_AUTH" }, PANEL)).toMatchObject({ signedIn: false, connected: false, pending: true });
+    // The second poll, 2 s later, returns the key.
+    await new Promise((r) => setTimeout(r, 2300));
+    const poll = fetchMock.mock.calls.filter(([u, i]) => String(u).endsWith("/auth/cli/status") && String((i as RequestInit).body).includes("claim_token"));
+    expect(poll.length).toBe(2);
+    expect(JSON.parse(String((poll[0][1] as RequestInit).body))).toEqual({ claim_token: TOK, reveal: true });
+    expect(fake.store.connection).toMatchObject({ apiKey: KEY, apiKeyId: "key_9", userId: "u9", email: "rep@acme.com", orgId: "org_9", orgName: "Acme", baseUrl: "https://code.deepline.com" });
+    expect(fake.sessionStore.claim).toBeNull();
+    expect(fake.alarms.has("lwe-claim")).toBe(false);
+    expect(await send({ type: "GET_AUTH" }, PANEL)).toMatchObject({ signedIn: true, connected: true, pending: false, keyId: "key_9", email: "rep@acme.com", orgId: "org_9", name: "Acme" });
+    expect(authChanges().at(-1).auth).toMatchObject({ connected: true });
+    expect(JSON.stringify(await send({ type: "GET_STATE" }, OPTIONS))).not.toContain(KEY);
+    expect(everything()).not.toContain(KEY);
+  }, 8000);
+
+  it("an expired approval link clears the claim and tells the panel; a refused one too", async () => {
+    claimReplies = [{ status: 200, body: { status: "expired" } }];
+    await send({ type: "CONNECT" }, PANEL);
+    await flushed();
+    expect(fake.store.connection).toBeUndefined();
+    expect(fake.sessionStore.claim).toBeNull();
+    expect(fake.alarms.has("lwe-claim")).toBe(false);
+    expect(authChanges().at(-1).auth).toMatchObject({ signedIn: false, connected: false, pending: false, error: "claim_expired" });
+    expect(log().some((e) => e.kind === "auth.changed" && /approval expired/.test(e.msg))).toBe(true);
+    claimReplies = [{ status: 401 }];
+    await send({ type: "CONNECT" }, PANEL);
+    await flushed();
+    expect(authChanges().at(-1).auth).toMatchObject({ signedIn: false, error: "claim_unauthorized" });
+    expect(fake.sessionStore.claim).toBeNull();
+    expect(JSON.stringify([fake.broadcasts, log(), fake.store])).not.toContain(TOK); // the claim token stays in session storage only
+  });
+
+  it("a worker restart resumes a pending approval from session storage", async () => {
+    await boot({ destinations: [], activeDestinationId: null }, () => {
+      fake.sessionStore.claim = { baseUrl: "https://code.deepline.com", claimToken: TOK, claimUrl: CLAIM_URL, startedAt: Date.now(), expiresAt: Date.now() + 3600_000 };
+      claimReplies = [{ status: 200, body: CLAIMED }];
+      fetchMock.mockImplementation(deviceFetch);
+    });
+    await flushed();
+    expect(fetchMock.mock.calls.some(([u]) => String(u).endsWith("/auth/cli/register"))).toBe(false);
+    expect(fake.store.connection).toMatchObject({ apiKey: KEY });
+    expect(fake.sessionStore.claim).toBeNull();
+    expect(await send({ type: "GET_AUTH" }, PANEL)).toMatchObject({ connected: true });
+  });
+
+  it("a claim past claim_expires_at is treated as expired without polling", async () => {
+    await boot({ destinations: [], activeDestinationId: null }, () => {
+      fake.sessionStore.claim = { baseUrl: "https://code.deepline.com", claimToken: TOK, claimUrl: CLAIM_URL, startedAt: Date.now() - 25 * 3600_000, expiresAt: Date.now() - 1000 };
+      fetchMock.mockImplementation(deviceFetch);
+    });
+    await flushed();
+    expect(fetchMock.mock.calls.some(([u]) => String(u).endsWith("/auth/cli/status"))).toBe(false);
+    expect(fake.sessionStore.claim).toBeNull();
+  });
+
+  it("the device key is the bearer for listing plays and for runs; runs are bound to the key's user and org", async () => {
+    claimReplies = [{ status: 200, body: CLAIMED }];
+    await send({ type: "CONNECT" }, PANEL);
+    await flushed();
+    const r = await send({ type: "LIST_PLAYS" }, PANEL);
+    expect(r.ok).toBe(true);
+    const list = fetchMock.mock.calls.find(([u]) => String(u).includes("/api/v2/plays?origin=owned"))!;
+    expect(list[1] as RequestInit).toMatchObject({ credentials: "omit", redirect: "error" });
+    expect(((list[1] as RequestInit).headers as Record<string, string>).Authorization).toBe(`Bearer ${KEY}`);
+    const st = await send({ type: "ADD_PLAY_DESTINATION", playKey: "acme/warm-intro", playName: "Warm intro", inputSchema: { properties: { linkedin_url: {} } }, activate: true }, PANEL);
+    expect(st.settings.destinations[0]).toMatchObject({ apiKey: "" }); // the key is never copied into settings
+    const c = await send({ type: "CAPTURE", leads: [lead(1)], pageType: "profile", pageUrl: "https://www.linkedin.com/in/x/" }, PAGE);
+    expect(c.queued).toBe(1);
+    await flushed();
+    const run = fetchMock.mock.calls.find(([u]) => String(u).endsWith("/plays/run"))!;
+    expect(run[1] as RequestInit).toMatchObject({ credentials: "omit" });
+    expect(((run[1] as RequestInit).headers as Record<string, string>).Authorization).toBe(`Bearer ${KEY}`);
+    expect(queue()[0]).toMatchObject({ status: "sent", runId: "wf_k", sessionIdentity: "u9|org_9" });
+    const t = await send({ type: "TEST_DESTINATION", destinationId: st.settings.destinations[0].id }, OPTIONS);
+    expect(t.ok).toBe(true);
+    expect(everything()).not.toContain(KEY);
+  });
+
+  it("disconnect forgets the key locally and falls back to the session; a revoked key does the same on the next check", async () => {
+    claimReplies = [{ status: 200, body: CLAIMED }];
+    await send({ type: "CONNECT" }, PANEL);
+    await flushed();
+    expect(await send({ type: "DISCONNECT" }, OPTIONS)).toMatchObject({ signedIn: false, connected: false });
+    expect(fake.store.connection).toBeNull();
+    await send({ type: "LIST_PLAYS" }, PANEL);
+    const list = fetchMock.mock.calls.filter(([u]) => String(u).includes("/api/v2/plays?origin=owned")).at(-1)!;
+    expect(list[1] as RequestInit).toMatchObject({ credentials: "include" }); // back to the session cookie
+    expect(((list[1] as RequestInit).headers as Record<string, string>).Authorization).toBeUndefined();
+    expect(log().some((e) => e.kind === "auth.changed" && /Disconnected/.test(e.msg))).toBe(true);
+    // Reconnect, then the key is revoked from Deepline's device list.
+    claimReplies = [{ status: 200, body: CLAIMED }];
+    await send({ type: "CONNECT" }, PANEL);
+    await flushed();
+    expect((await send({ type: "GET_AUTH" }, PANEL)).connected).toBe(true);
+    keyRevoked = true;
+    expect(await send({ type: "GET_AUTH", refresh: true }, PANEL)).toMatchObject({ signedIn: false, connected: false });
+    expect(fake.store.connection).toBeNull();
+    expect(log().some((e) => /revoked/.test(e.msg))).toBe(true);
+    expect(everything()).not.toContain(KEY);
+  });
+
+  it("content scripts cannot connect or disconnect", async () => {
+    expect(await send({ type: "CONNECT" }, PAGE)).toEqual({ error: "forbidden" });
+    expect(await send({ type: "DISCONNECT" }, PAGE)).toEqual({ error: "forbidden" });
   });
 });

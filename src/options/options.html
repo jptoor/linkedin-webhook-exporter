@@ -91,7 +91,8 @@
 
     <div id="playFields">
       <div id="authState" class="small muted" style="margin-top:8px">Checking your Deepline sign-in…</div>
-      <div class="actions" style="margin-top:8px"><button id="signInBtn" type="button">Sign in to Deepline</button><span class="small muted">Plays load from your own sign-in. Nothing to paste.</span></div>
+      <div class="actions" style="margin-top:8px"><button id="connectBtn" type="button">Connect Deepline</button><button id="disconnectBtn" type="button" hidden>Disconnect</button><button id="signInBtn" type="button">Sign in to Deepline</button><span class="small muted">Connect approves this browser in Deepline and stores a device key you can revoke from your device list; otherwise plays load from your sign-in. Nothing to paste.</span></div>
+      <div id="authNote" class="small muted" hidden></div>
       <details><summary>Advanced: use an API key or a self-hosted Deepline</summary>
         <label for="apiKey">Deepline API key (optional)</label>
         <input id="apiKey" type="password" autocomplete="off" placeholder="dl_… (leave empty to use your sign-in)">

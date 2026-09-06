@@ -516,6 +516,11 @@ $("signInBtn").addEventListener("click", async () => {
   await msg({ type: "SIGN_IN" });
   note($("signInNote"), "A Deepline tab opened. Sign in there; this panel updates by itself.", "info");
 });
+$("connectBtn").addEventListener("click", async () => {
+  note($("signInNote"), "Asking Deepline for an approval link…", "info");
+  const r = await msg<{ ok: boolean; error: string | null }>({ type: "CONNECT" });
+  note($("signInNote"), r.ok ? "A Deepline tab opened. Approve this browser there; this panel updates by itself." : `Could not reach Deepline: ${r.error}`, r.ok ? "info" : "err");
+});
 $("signInSettings").addEventListener("click", () => chrome.runtime.openOptionsPage());
 $("firstRunPick").addEventListener("click", () => {
   openSheet();
@@ -583,6 +588,8 @@ chrome.runtime.onMessage.addListener((m: BackgroundToPanel) => {
     sheetPlays = null;
     renderDest();
     if (auth.signedIn) note($("signInNote"), null);
+    else if (auth.error === "claim_expired") note($("signInNote"), "That approval link expired. Click Connect Deepline again.", "warn");
+    else if (auth.error === "claim_unauthorized") note($("signInNote"), "Deepline refused the approval. Click Connect Deepline to try again.", "err");
   }
 });
 chrome.tabs.onActivated.addListener(() => {

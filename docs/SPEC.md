@@ -215,6 +215,34 @@ rejected with `signed_out` when there is no session. Plays are listed and
 run the same way (no `Authorization` header). A play destination with an
 empty `apiKey` means "use my sign-in"; the panel's picker adds such plays
 directly (`ADD_PLAY_DESTINATION`). API keys remain an Advanced option.
+**Connect Deepline (device key).** The same device-approval flow as
+`deepline auth register`, run from the worker: `POST /api/v2/auth/cli/register`
+(unauthenticated, `{ agent_name: "Chrome extension: Deepline for LinkedIn" }`)
+returns `claim_url` (on the base origin; a GET 307s to the approval page),
+`claim_token` and `claim_expires_at` (about 24 h). The claim URL opens in a
+tab where the rep approves the device; the worker polls
+`POST /api/v2/auth/cli/status { claim_token, reveal: true }` every 2 s with
+the CLI's status handling (401/403 = refused, 5xx/400/network = keep
+polling, `expired` = start over, `claimed` + `api_key` = done) until
+`claim_expires_at`. The pending claim lives in `chrome.storage.session` and
+a 30 s alarm (`lwe-claim`) resumes polling after a worker restart. The
+resulting `{ baseUrl, apiKey, apiKeyId, userId, email, orgId, orgName }` is
+stored under `connection` in `chrome.storage.local`; the key never crosses
+into an extension page (`AuthResponse` carries `connected: true` and the
+`api_key_id` as `keyId` for the Disconnect label) and is never logged.
+Credential order for listing/running/testing plays with an empty
+destination `apiKey`: the device key (`Authorization: Bearer`,
+`credentials: "omit"`) when its `baseUrl` matches `deeplineBaseUrl`, else
+the session cookie. The key's identity comes from
+`POST /api/v2/auth/cli/status { api_key }` (`user_id`, `org_id`, `org_name`)
+and feeds the same `sessionIdentity` binding; 401/403 there means the
+device was revoked in Deepline, so the key is dropped and the extension
+falls back to the session. All auth calls send
+`X-Deepline-Client-Family: chrome-extension` and
+`X-Deepline-Client-Version`. "Disconnect" removes the key locally only:
+the CLI exposes no revoke endpoint, so revocation happens in Deepline's
+device list. The key mode is not gated by the `session_auth` flag.
+
 Remote flags are enforced: `session_auth` off makes the extension signed
 out and refuses session-mode play listing; `search_import` off rejects
 search imports with `search_import_disabled`; `intercept` off is applied on

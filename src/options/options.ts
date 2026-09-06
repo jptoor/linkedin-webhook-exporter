@@ -163,10 +163,16 @@ async function ensureHostPermission(url: string): Promise<boolean> {
 let auth: AuthResponse | null = null;
 async function refreshAuth(refresh = false) {
   auth = await msg<AuthResponse>({ type: "GET_AUTH", refresh });
-  const el = document.getElementById("authState");
-  if (el) el.textContent = auth.signedIn ? `Signed in to Deepline as ${auth.email ?? auth.name ?? "you"}.` : "Not signed in to Deepline.";
-  const btn = document.getElementById("signInBtn");
-  if (btn) btn.hidden = !!auth.signedIn;
+  renderAuth(auth);
+}
+function renderAuth(a: AuthResponse) {
+  $("authState").textContent = a.connected ? `Connected to Deepline as ${a.email ?? "you"}${a.name ? ` (${a.name})` : ""} with device key ${a.keyId ?? "for this browser"}.` : a.signedIn ? `Signed in to Deepline as ${a.email ?? a.name ?? "you"}.` : a.pending ? "Waiting for you to approve this browser in the Deepline tab…" : "Not signed in to Deepline.";
+  $("signInBtn").hidden = a.signedIn;
+  $("connectBtn").hidden = a.connected || a.pending;
+  $("disconnectBtn").hidden = !a.connected;
+  const note = $("authNote");
+  note.hidden = !(a.error === "claim_expired" || a.error === "claim_unauthorized");
+  note.textContent = a.error === "claim_expired" ? "That approval link expired. Click Connect Deepline again." : a.error === "claim_unauthorized" ? "Deepline refused the approval. Click Connect Deepline to try again." : "";
 }
 
 async function loadPlays() {
@@ -215,10 +221,20 @@ function renderPlays() {
 
 $("addDest").addEventListener("click", () => openEditor(undefined, "deepline_play"));
 $("signInBtn").addEventListener("click", () => void msg({ type: "SIGN_IN" }));
+$("connectBtn").addEventListener("click", async () => {
+  const r = await msg<{ ok: boolean; error: string | null }>({ type: "CONNECT" });
+  if (!r.ok) setStatus($("playsStatus"), `Could not reach Deepline: ${r.error}`, "err");
+  await refreshAuth();
+});
+$("disconnectBtn").addEventListener("click", async () => {
+  if (!confirm("Disconnect this browser from Deepline? The device key is removed here; revoke it in Deepline's device list too.")) return;
+  await msg({ type: "DISCONNECT" });
+  await refreshAuth(true);
+});
 chrome.runtime.onMessage.addListener((m: { type?: string; auth?: AuthResponse }) => {
   if (m?.type === "AUTH_CHANGED" && m.auth) {
     auth = m.auth;
-    void refreshAuth();
+    renderAuth(auth);
   }
 });
 $("addWebhook").addEventListener("click", () => openEditor(undefined, "webhook"));

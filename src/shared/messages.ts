@@ -37,6 +37,8 @@ export type ContentToBackground =
   | { type: "GET_AUTH"; refresh?: boolean }
   | { type: "PANEL_ERROR"; message: string; stack?: string | null }
   | { type: "SIGN_IN" }
+  | { type: "CONNECT" }
+  | { type: "DISCONNECT" }
   | { type: "INTERCEPT_STATS"; responses: number; people: number; total: number | null; pageType: PageType | null }
   | { type: "SEARCH_CAPTURE"; url: string; pageType: PageType; totalHint: number | null; limit?: number; searchName?: string | null; savedSearchId?: string | null; force?: boolean; destinationId?: string }
   | { type: "BASKET_ADD"; leads: LeadRecord[]; pageType: PageType; pageUrl: string; pageTitle?: string }
@@ -107,6 +109,12 @@ export interface ListPlaysResponse {
 
 export interface AuthResponse {
   signedIn: boolean;
+  /** Signed in through a per-device API key ("Connect Deepline") rather than the browser session. */
+  connected: boolean;
+  /** A device approval is open in a Deepline tab and being polled. */
+  pending: boolean;
+  /** Deepline's id for the device key (label only; never the key itself). */
+  keyId: string | null;
   baseUrl: string;
   email: string | null;
   name: string | null;

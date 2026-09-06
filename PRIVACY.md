@@ -32,9 +32,18 @@ who is signed in, and Chrome attaches your session cookie to that request
 and to play runs by itself. The cookie's value is never read into extension
 code and never stored. Anything you queue while signed in is tied to that
 account and organisation; if you sign out or switch accounts before it is
-sent, it fails instead of going out under the other account. Alternatively
-you can paste an API key under Advanced; that key is stored in this browser
-only.
+sent, it fails instead of going out under the other account.
+
+**Connect Deepline** is the alternative: the extension registers itself as
+a device with Deepline (the same approval flow as the Deepline CLI), you
+approve it on a Deepline page, and Deepline issues a key for this browser
+only. That key is stored in the extension's local storage, sent only to
+your Deepline address as an `Authorization` header (never with cookies),
+never shown to the extension's own pages, and never written to the history.
+Disconnect removes it from this browser; revoke it in Deepline's device
+list to invalidate it everywhere. Once revoked, the extension notices on
+its next check and falls back to your sign-in. You can also paste an API
+key under Advanced; that key is stored in this browser only.
 
 ## Where it sends data
 
@@ -73,6 +82,8 @@ In the browser profile's extension storage, never synced:
 
 - your settings, including destinations with their API keys, signing secrets
   and optional auth headers;
+- the device key from Connect Deepline, with the user and org ids it
+  belongs to;
 - a queue of pending/sent/failed deliveries (bodies are kept until sent, then
   pruned after 24 hours);
 - a dedupe map of people you already pushed (default 30 days);
@@ -82,8 +93,9 @@ In the browser profile's extension storage, never synced:
 - a random anonymous id for telemetry.
 
 In session storage, cleared when the browser closes: the people you have
-selected but not yet pushed, Sales Navigator share links captured, and your
-Deepline sign-in state (email, org id).
+selected but not yet pushed, Sales Navigator share links captured, your
+Deepline sign-in state (email, org id), and a pending device approval while
+you are connecting.
 
 Anyone with access to the browser profile can read these. Treat the profile
 as the trust boundary. Clearing the extension's storage (or removing the

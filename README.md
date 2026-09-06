@@ -60,14 +60,19 @@ Click the toolbar icon to open the side panel.
 
 ## Connect Deepline
 
-1. Open the side panel on any LinkedIn page and click **Sign in to Deepline**
-   (or just sign in to the Deepline app in another tab; the extension follows
-   your sign-in, the way Frontier's does).
+1. Open the side panel on any LinkedIn page and click **Connect Deepline**.
+   A Deepline tab asks you to approve this browser (the same device flow as
+   `deepline auth register`); the extension then holds a per-device key you
+   can revoke from Deepline's device list. Or click **Sign in to Deepline**
+   (or just sign in to the Deepline app in another tab) and the extension
+   follows your sign-in, the way Frontier's does.
 2. **Choose a play** in the panel. Your workspace's plays load from your own
    sign-in. Nothing to paste.
 3. The pinned button now reads "Push … to <play>".
 
 Prefer a key? Settings → Use a Deepline play → Advanced → paste an API key.
+Disconnect (Settings → Use a Deepline play → Disconnect) forgets the device
+key in this browser; revoke it in Deepline to invalidate it everywhere.
 
 The extension reads the play's input schema and shapes the run input to it:
 `leads[]` gets one run per push, `lead{}` or field names such as

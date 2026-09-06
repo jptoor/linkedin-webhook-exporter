@@ -2,7 +2,7 @@ declare const __EXTENSION_VERSION__: string;
 declare const __TEST_BUILD__: boolean;
 
 import { addToBasket, basketItems, basketPages, groupByPage, removeFromBasket, type Basket } from "../shared/basket";
-import { buildLeadRuns, buildSearchRun, inferPlayInput, listPlays, testApiKey, unfillableRequired } from "../shared/deepline";
+import { buildLeadRuns, buildSearchRun, inferPlayInput, listPlays, normalizeBaseUrl, testApiKey, unfillableRequired } from "../shared/deepline";
 import { buildBodies, buildSearchBody } from "../shared/mapping";
 import type { AuthResponse, BasketResponse, CaptureResponse, ContentToBackground, ListPlaysResponse, PageContext, SearchCaptureResponse, StateResponse } from "../shared/messages";
 import { dedupeKey } from "../shared/normalize";
@@ -11,7 +11,7 @@ import { activeDestination, describeDestination, getSettings, newId, redactDesti
 import { DEFAULT_FLAGS, fetchFlags, installErrorHandlers, reportError, track, type Flags, type TelemetryContext } from "../shared/telemetry";
 import type { ContentSettings, Destination, ImportInfo, LeadRecord, PageType, QueueItem, Settings, SourceInfo } from "../shared/types";
 import { isAllowedPageUrl, isPageType, validateLead, validateLeads } from "../shared/validate";
-import { fetchSession, identityKey, isDeeplineTab, signInUrl, type SessionState } from "./auth";
+import { fetchSession, identityKey, isDeeplineTab, keySession, pollClaim, registerDevice, signInUrl, type Connection, type PendingClaim, type SessionState } from "./auth";
 import { withLock } from "./lock";
 import { clearLog, logEvent, readLog } from "../shared/log";
 import { afterAttempt, claim, clearQueue, due, newItem, nextWake, prune, recoverStaleLeases } from "./queue";
@@ -20,8 +20,9 @@ import { playRunBody, sendBody } from "./sender";
 const VERSION = typeof __EXTENSION_VERSION__ === "string" ? __EXTENSION_VERSION__ : "dev";
 const TEST_BUILD = typeof __TEST_BUILD__ === "boolean" ? __TEST_BUILD__ : false;
 const ALARM = "lwe-flush";
-const KEYS = { queue: "queue", dedupe: "dedupe", daily: "daily", anonymousId: "anonymousId" } as const;
-const SESSION_KEYS = { basket: "basket", shareLinks: "shareLinks", auth: "auth" } as const;
+const CLAIM_ALARM = "lwe-claim";
+const KEYS = { queue: "queue", dedupe: "dedupe", daily: "daily", anonymousId: "anonymousId", connection: "connection" } as const;
+const SESSION_KEYS = { basket: "basket", shareLinks: "shareLinks", auth: "auth", claim: "claim" } as const;
 
 /* ------------------------------------------------------------ storage */
 
@@ -137,28 +138,135 @@ async function destinationProblem(dest: Destination | null): Promise<CaptureResp
   return null;
 }
 
-/* ------------------------------------------------------------ auth (session) */
+/* ------------------------------------------------------------ auth (device key, else session) */
 
-let sessionCache: SessionState | null = null;
+/** Credential order: a device key from "Connect Deepline" (stored under
+ *  `connection` in local storage, never handed to extension pages), else
+ *  the browser session cookie. Either way the identity feeds the same
+ *  `sessionIdentity` binding on queued runs. */
+type CachedAuth = SessionState & { via: "key" | "session"; keyId: string | null };
+let sessionCache: CachedAuth | null = null;
 const AUTH_TTL_MS = 5 * 60_000;
+
+async function connectionFor(baseUrl: string): Promise<Connection | null> {
+  const c = (await chrome.storage.local.get(KEYS.connection))[KEYS.connection] as Connection | null | undefined;
+  return c && typeof c.apiKey === "string" && c.apiKey && c.baseUrl === baseUrl ? c : null;
+}
+/** A session-mode play destination sends with the device key when one exists. */
+async function withKey<T extends Destination>(dest: T): Promise<T> {
+  if (!usesSession(dest)) return dest;
+  const conn = await connectionFor(dest.baseUrl);
+  return conn ? { ...dest, apiKey: conn.apiKey } : dest;
+}
 
 async function getAuth(refresh = false): Promise<AuthResponse> {
   const settings = await getSettings();
   const base = settings.deeplineBaseUrl;
-  if (!flags.session_auth) return { signedIn: false, baseUrl: base, email: null, name: null, orgId: null, error: "session_auth_disabled" };
+  const conn = await connectionFor(base);
+  if (!conn && !flags.session_auth) return { signedIn: false, connected: false, pending: !!pendingClaim, keyId: null, baseUrl: base, email: null, name: null, orgId: null, error: "session_auth_disabled" };
   if (!refresh && sessionCache && sessionCache.baseUrl === base && Date.now() - sessionCache.checkedAt < AUTH_TTL_MS) return toAuth(sessionCache);
   const prev = sessionCache?.signedIn ?? null;
-  sessionCache = await fetchSession(base, fetch);
+  if (conn) {
+    const s = await keySession(conn, VERSION, fetch);
+    if (s.revoked) {
+      // Revoked from Deepline's device list: forget the key, fall back to the session.
+      await chrome.storage.local.set({ [KEYS.connection]: null });
+      await logEvent("auth.changed", "Deepline device key was revoked; disconnected", { host: new URL(base).host });
+      sessionCache = null;
+      return getAuth(true);
+    }
+    sessionCache = { ...s, via: "key" };
+  } else sessionCache = { ...(await fetchSession(base, fetch)), via: "session", keyId: null };
   await session().set({ [SESSION_KEYS.auth]: sessionCache }).catch(() => undefined);
   if (prev !== sessionCache.signedIn) {
-    await logEvent("auth.changed", sessionCache.signedIn ? `Signed in to Deepline as ${sessionCache.email ?? "user"}` : "Not signed in to Deepline", { signedIn: sessionCache.signedIn, host: new URL(base).host, orgId: sessionCache.orgId });
+    await logEvent("auth.changed", sessionCache.signedIn ? `Signed in to Deepline as ${sessionCache.email ?? sessionCache.name ?? "user"} (${sessionCache.via})` : "Not signed in to Deepline", { signedIn: sessionCache.signedIn, via: sessionCache.via, host: new URL(base).host, orgId: sessionCache.orgId });
     broadcast({ type: "AUTH_CHANGED", auth: toAuth(sessionCache) });
-    if (sessionCache.signedIn) void telemetryTrack("signed_in", {});
+    if (sessionCache.signedIn) void telemetryTrack("signed_in", { via: sessionCache.via });
   }
   return toAuth(sessionCache);
 }
-function toAuth(s: SessionState): AuthResponse {
-  return { signedIn: s.signedIn, baseUrl: s.baseUrl, email: s.email, name: s.name, orgId: s.orgId, error: s.error };
+function toAuth(s: CachedAuth): AuthResponse {
+  return { signedIn: s.signedIn, connected: s.signedIn && s.via === "key", pending: !!pendingClaim, keyId: s.via === "key" ? s.keyId : null, baseUrl: s.baseUrl, email: s.email, name: s.name, orgId: s.orgId, error: s.error };
+}
+
+/* ---------- Connect Deepline: register -> approve in a tab -> poll -> key ---------- */
+
+let pendingClaim: PendingClaim | null = null;
+let claimPolling = false;
+const CLAIM_POLL_MS = 2000;
+
+async function connect(): Promise<{ ok: boolean; error: string | null }> {
+  const s = await getSettings();
+  try {
+    const claim = await registerDevice(s.deeplineBaseUrl, VERSION, fetch);
+    pendingClaim = claim;
+    await session().set({ [SESSION_KEYS.claim]: claim });
+    // The alarm resumes polling if the worker is suspended while the rep approves.
+    await chrome.alarms.create(CLAIM_ALARM, { periodInMinutes: 0.5 });
+    await chrome.tabs.create({ url: claim.claimUrl, active: true });
+    await logEvent("auth.changed", "Deepline device approval opened", { host: new URL(claim.baseUrl).host });
+    broadcast({ type: "AUTH_CHANGED", auth: await getAuth() });
+    void runClaimPoll();
+    return { ok: true, error: null };
+  } catch (e) {
+    const error = e instanceof Error ? e.message : String(e);
+    await logEvent("error", `Connect Deepline failed: ${error}`, { error });
+    return { ok: false, error };
+  }
+}
+
+/** Poll the pending claim every 2 s (like `deepline auth wait`) until it is
+ *  claimed, expired, refused, or past `claim_expires_at`. Single-flight; safe
+ *  to call from boot, the alarm and CONNECT. Re-reading storage each turn is
+ *  an extension API call, which also keeps the worker alive between polls.
+ *  ponytail: an abandoned claim keeps the alarm firing until it expires
+ *  (~24 h); Disconnect or a new Connect clears it. */
+async function runClaimPoll(): Promise<void> {
+  if (claimPolling) return;
+  claimPolling = true;
+  try {
+    for (;;) {
+      const claim = ((await session().get(SESSION_KEYS.claim))[SESSION_KEYS.claim] ?? null) as PendingClaim | null;
+      pendingClaim = claim && typeof claim.claimToken === "string" ? claim : null;
+      if (!pendingClaim) break;
+      const r = Date.now() > pendingClaim.expiresAt ? { state: "expired" as const } : await pollClaim(pendingClaim, VERSION, fetch);
+      if (r.state === "pending") {
+        await new Promise((res) => setTimeout(res, CLAIM_POLL_MS));
+        continue;
+      }
+      const host = new URL(pendingClaim.baseUrl).host;
+      await session().set({ [SESSION_KEYS.claim]: null });
+      pendingClaim = null;
+      await chrome.alarms.clear(CLAIM_ALARM);
+      sessionCache = null;
+      if (r.state === "claimed") {
+        await chrome.storage.local.set({ [KEYS.connection]: r.connection });
+        await logEvent("auth.changed", "Connected to Deepline with a device key", { host, orgId: r.connection.orgId });
+        broadcast({ type: "AUTH_CHANGED", auth: await getAuth(true) });
+        void telemetryTrack("connected", {});
+      } else {
+        await logEvent("auth.changed", `Deepline device approval ${r.state}`, { host, state: r.state });
+        broadcast({ type: "AUTH_CHANGED", auth: { ...(await getAuth()), error: `claim_${r.state}` } });
+      }
+      break;
+    }
+  } finally {
+    claimPolling = false;
+  }
+}
+
+/** Forget the device key in this browser. The CLI has no revoke endpoint;
+ *  the rep revokes the device itself from Deepline's device list. */
+async function disconnect(): Promise<AuthResponse> {
+  await chrome.storage.local.set({ [KEYS.connection]: null });
+  await session().set({ [SESSION_KEYS.claim]: null });
+  pendingClaim = null;
+  await chrome.alarms.clear(CLAIM_ALARM);
+  sessionCache = null;
+  await logEvent("auth.changed", "Disconnected from Deepline (device key removed from this browser)");
+  const auth = await getAuth(true);
+  broadcast({ type: "AUTH_CHANGED", auth });
+  return auth;
 }
 
 /** The identity a session-mode run is authorized under right now, re-checked
@@ -188,6 +296,7 @@ async function anonymousId(): Promise<string> {
 async function telemetryContext(): Promise<TelemetryContext> {
   const settings = await getSettings();
   const auth = sessionCache?.baseUrl === settings.deeplineBaseUrl && sessionCache.signedIn ? sessionCache : null;
+  const conn = auth?.via === "key" ? await connectionFor(settings.deeplineBaseUrl) : null;
   const key = auth ? null : settings.destinations.find((d): d is Extract<Destination, { kind: "deepline_play" }> => d.kind === "deepline_play" && !!d.apiKey);
   return {
     enabled: settings.telemetry && flags.telemetry,
@@ -195,7 +304,7 @@ async function telemetryContext(): Promise<TelemetryContext> {
     userId: auth?.userId ?? null,
     orgId: auth?.orgId ?? null,
     baseUrl: auth ? settings.deeplineBaseUrl : (key?.baseUrl ?? null),
-    apiKey: key?.apiKey ?? null
+    apiKey: conn?.apiKey ?? key?.apiKey ?? null
   };
 }
 /** Remote kill switches applied on top of the operator's own settings. */
@@ -577,7 +686,7 @@ async function flush(): Promise<void> {
       // A run queued on the rep's sign-in goes out only under that same
       // user and org. Signed out or switched account: fail it, never retry.
       const identityProblem = usesSession(claimed.dest) && (claimed.item.sessionIdentity ?? null) !== (await currentIdentity());
-      const result = identityProblem ? { ok: false, status: null, retryable: false, error: sessionCache?.signedIn ? "account_changed" : "signed_out" } : await sendBody(claimed.dest, claimed.item.body, claimed.item.id, { version: VERSION, dedupeKey: claimed.item.dedupeKey });
+      const result = identityProblem ? { ok: false, status: null, retryable: false, error: sessionCache?.signedIn ? "account_changed" : "signed_out" } : await sendBody(await withKey(claimed.dest), claimed.item.body, claimed.item.id, { version: VERSION, dedupeKey: claimed.item.dedupeKey });
       await withLock(async () => {
         const now = Date.now();
         const items = await loadQueue();
@@ -638,16 +747,17 @@ async function testDestination(raw: Destination | undefined, destinationId: stri
     const body = JSON.stringify({ schema_version: "1", event: "test", event_id: eventId, sent_at: new Date().toISOString(), source, custom: settings.customFields });
     r = await sendBody(dest, body, eventId, { version: VERSION, timeoutMs: 10_000 });
   } else {
-    r = await testApiKey(dest.baseUrl, dest.apiKey || null);
+    r = await testApiKey(dest.baseUrl, (await withKey(dest)).apiKey || null);
   }
   await logEvent("destination.test", r.ok ? `${describeDestination(dest)}: test ok (${r.status})` : `${describeDestination(dest)}: test failed: ${r.error}`, { status: r.status, error: r.error, destination: dest.id, kind: dest.kind });
   return { ok: r.ok, status: r.status, error: r.error };
 }
 
 async function handleListPlays(baseUrl: string, apiKey: string | null): Promise<ListPlaysResponse> {
-  if (!apiKey && !flags.session_auth) return { ok: false, plays: [], error: "Sign-in is turned off for this version. Use an API key under Advanced." };
   try {
-    const plays = await listPlays(baseUrl, apiKey);
+    const key = apiKey ?? (await connectionFor(normalizeBaseUrl(baseUrl)))?.apiKey ?? null;
+    if (!key && !flags.session_auth) return { ok: false, plays: [], error: "Sign-in is turned off for this version. Use an API key under Advanced." };
+    const plays = await listPlays(baseUrl, key);
     await logEvent("plays.listed", `${plays.length} Deepline play(s) listed`, { count: plays.length, host: new URL(baseUrl).host });
     return { ok: true, plays, error: null };
   } catch (e) {
@@ -659,8 +769,8 @@ async function handleListPlays(baseUrl: string, apiKey: string | null): Promise<
 
 /** Add a play as a destination using the rep's Deepline sign-in (no key). */
 async function addPlayDestination(playKey: string, playName: string, inputSchema: Record<string, unknown> | null, activate: boolean): Promise<StateResponse> {
-  if (!flags.session_auth) throw new Error("Sign-in is turned off for this version. Use an API key under Advanced.");
   const settings = await getSettings();
+  if (!flags.session_auth && !(await connectionFor(settings.deeplineBaseUrl))) throw new Error("Sign-in is turned off for this version. Use an API key under Advanced.");
   const existing = settings.destinations.find((d) => d.kind === "deepline_play" && d.playKey === playKey && !d.apiKey);
   const id = existing?.id ?? newId();
   const dest: Destination = { id, kind: "deepline_play", name: playName || playKey, favorite: existing?.favorite ?? false, baseUrl: settings.deeplineBaseUrl, apiKey: "", playKey, playName: playName || playKey, input: inferPlayInput(inputSchema) };
@@ -778,6 +888,10 @@ chrome.runtime.onMessage.addListener((msg: ContentToBackground, sender, sendResp
         await chrome.tabs.create({ url: signInUrl(s.deeplineBaseUrl), active: true });
         return { ok: true };
       }
+      case "CONNECT":
+        return fromExt ? connect() : { error: "forbidden" };
+      case "DISCONNECT":
+        return fromExt ? disconnect() : { error: "forbidden" };
       case "INTERCEPT_STATS": {
         if (!fromPage) return { error: "forbidden" };
         await logEvent("intercept.captured", `LinkedIn API responses observed: ${Number(msg.responses) || 0} (${Number(msg.people) || 0} people${typeof msg.total === "number" ? `, ${msg.total} total` : ""})`, { responses: Number(msg.responses) || 0, people: Number(msg.people) || 0, total: typeof msg.total === "number" ? msg.total : null, pageType: isPageType(msg.pageType) ? msg.pageType : null, pageUrl: tabUrl });
@@ -924,6 +1038,7 @@ chrome.runtime.onInstalled.addListener((d) => {
 
 chrome.alarms.onAlarm.addListener((a) => {
   if (a.name === ALARM) void flush();
+  if (a.name === CLAIM_ALARM) void runClaimPoll();
 });
 chrome.runtime.onStartup.addListener(() => void flush());
 chrome.runtime.onInstalled.addListener(() => {
@@ -932,8 +1047,10 @@ chrome.runtime.onInstalled.addListener(() => {
   void chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: true }).catch(() => undefined);
 });
 void chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: true }).catch(() => undefined);
-// A fresh worker instance (after suspension) also recovers leases.
+// A fresh worker instance (after suspension) also recovers leases and
+// resumes a device approval that was in progress.
 void flush();
+void runClaimPoll();
 
 chrome.commands?.onCommand?.addListener(async (command) => {
   if (command !== "send-current") return;
