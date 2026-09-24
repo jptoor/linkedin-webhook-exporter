@@ -739,3 +739,101 @@ test("page scripts cannot drive the extension: synthetic clicks and forged bridg
   expect(got).toBeTruthy();
   expect(JSON.stringify(hook.received.slice(before))).not.toContain("Forged");
 });
+
+/* Explicit connections sync: localhost fixtures only, never real LinkedIn. */
+async function connectionFixture(total: number, failPage = -1, failureStatus = 429) {
+  await configure(context, extensionId, { url: hook.url, signingSecret: SECRET, dailyCap: 100 });
+  await context.addCookies([{ name: "JSESSIONID", value: '"fixture-csrf"', url: site.origin }]);
+  const page = await context.newPage();
+  const calls: number[] = [];
+  await page.route("**/voyager/api/**", async route => {
+    const url = new URL(route.request().url());
+    expect(route.request().headers()["csrf-token"]).toBe("fixture-csrf");
+    if (url.pathname.endsWith("/me")) return route.fulfill({ json: { miniProfile: { entityUrn: "urn:li:fs_miniProfile:owner1234" } } });
+    const start = Number(url.searchParams.get("start"));
+    const count = Number(url.searchParams.get("count"));
+    calls.push(start);
+    if (start === failPage) return route.fulfill({ status: failureStatus, json: { error: "restricted" } });
+    const ids = Array.from({ length: Math.min(count, total - start) }, (_, i) => start + i);
+    await route.fulfill({ json: { data: { elements: ids.map(i => `urn:li:connection:${i}`), paging: { start, count, total } }, included: ids.flatMap(i => [
+      { entityUrn: `urn:li:fsd_profile:person000${i}`, firstName: "Person", lastName: String(i), publicIdentifier: `connection-${i}` },
+      { entityUrn: `urn:li:connection:${i}`, "*connectedMember": `urn:li:fsd_profile:person000${i}`, createdAt: 1700000000000 }
+    ]) } });
+  });
+  await page.goto(`${site.origin}/in/jane-doe-123/`);
+  await expect(dock(page)).toBeVisible();
+  const panel = await openPanelFor(context, extensionId, page);
+  await expect(panel.locator("#destName")).toHaveText("Hook");
+  await panel.setViewportSize({ width: 380, height: 800 });
+  return { page, panel, calls };
+}
+
+test("connections sync: explicit start, paged collection, signed delivery, metadata and dedupe", async () => {
+  const { panel, calls } = await connectionFixture(43);
+  expect(calls).toEqual([]);
+  await panel.locator("#connectionsLimit").fill("43");
+  await panel.locator("#connectionsStart").click();
+  await expect(panel.locator("#connectionsStatus")).toContainText("End of network reached");
+  await hook.waitFor(43);
+  expect(calls).toEqual([0, 40]);
+  expect(hook.leads[0].json).toMatchObject({ source: { page_type: "connections" }, import: { import_kind: "connections" }, lead: { connection_degree: "1st", connection_owner_urn: "urn:li:fs_miniProfile:owner1234", connected_at: "2023-11-14T22:13:20.000Z" } });
+  expect(JSON.stringify(hook.received)).not.toContain("fixture-csrf");
+  const stored = await readStorage(context, extensionId);
+  expect(JSON.stringify(stored)).not.toContain("fixture-csrf");
+  await panel.locator("#connectionsStart").click();
+  await expect(panel.locator("#connectionsStatus")).toContainText("43 already exported");
+  expect(hook.leads).toHaveLength(43);
+  await panel.screenshot({ path: "test-results/connections-sync.png", fullPage: true });
+});
+
+test("connections sync: a rate limit stops collection without retry or false success", async () => {
+  const { panel, calls } = await connectionFixture(80, 40);
+  await panel.locator("#connectionsLimit").fill("80");
+  await panel.locator("#connectionsStart").click();
+  await expect(panel.locator("#connectionsStatus")).toContainText("HTTP 429");
+  expect(calls).toEqual([0, 40]);
+  await hook.waitFor(40);
+  expect(hook.leads).toHaveLength(40);
+  await expect(panel.locator("#connectionsStatus")).toContainText("failed:");
+});
+
+test("connections sync: stop and concurrent start cannot create overlapping crawls", async () => {
+  const { panel, calls } = await connectionFixture(100);
+  await panel.locator("#connectionsStart").click();
+  await expect.poll(() => calls.length).toBe(1);
+  const duplicate = await sendMessage(context, extensionId, { type: "CONNECTIONS_START", tabId: 1, destinationId: "w1", limit: 100 });
+  expect(duplicate.error).toContain("already running");
+  await panel.locator("#connectionsStop").click();
+  await expect(panel.locator("#connectionsStatus")).toContainText("stopped:");
+  expect(calls).toEqual([0]);
+});
+
+for (const httpStatus of [401, 403]) {
+  test(`connections sync: HTTP ${httpStatus} ends collection without retry`, async () => {
+    const { panel, calls } = await connectionFixture(10, 0, httpStatus);
+    await panel.locator("#connectionsStart").click();
+    await expect(panel.locator("#connectionsStatus")).toContainText(`HTTP ${httpStatus}`);
+    expect(calls).toEqual([0]);
+    expect(hook.leads).toHaveLength(0);
+  });
+}
+
+test("connections sync: session changes stop before another connection request", async () => {
+  const { panel, calls } = await connectionFixture(100);
+  await panel.locator("#connectionsStart").click();
+  await expect.poll(() => calls.length).toBe(1);
+  await hook.waitFor(40);
+  await context.addCookies([{ name: "JSESSIONID", value: '"different-account"', url: site.origin }]);
+  await expect(panel.locator("#connectionsStatus")).toContainText("session changed");
+  expect(calls).toEqual([0]);
+  expect(hook.leads).toHaveLength(40);
+});
+
+test("connections sync: export cap is checked before collecting any data", async () => {
+  const { panel, calls } = await connectionFixture(100);
+  await panel.locator("#connectionsLimit").fill("101");
+  await panel.locator("#connectionsStart").click();
+  await expect(panel.locator("#connectionsStatus")).toContainText("Only 100 exports remain");
+  expect(calls).toEqual([]);
+  expect(hook.leads).toHaveLength(0);
+});

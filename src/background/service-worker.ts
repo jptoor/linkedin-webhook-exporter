@@ -1,3 +1,4 @@
+import { connectionStatus, startConnections, stopConnections } from "./connections";
 declare const __EXTENSION_VERSION__: string;
 declare const __TEST_BUILD__: boolean;
 
@@ -367,7 +368,7 @@ function enqueueLeads(dest: Destination, settings: Settings, leads: LeadRecord[]
   return { queued: leads.length, eventIds };
 }
 
-async function handleCapture(msg: CaptureMsg): Promise<CaptureResponse> {
+async function handleCapture(msg: CaptureMsg, connections = false): Promise<CaptureResponse> {
   return withLock(async () => {
     const settings = await getSettings();
     const now = Date.now();
@@ -392,6 +393,10 @@ async function handleCapture(msg: CaptureMsg): Promise<CaptureResponse> {
 
     const requested = Array.isArray(msg.leads) ? msg.leads.length : 0;
     let leads = validateLeads(msg.leads);
+    if (connections) {
+      if (leads.length !== msg.leads.length) return reject("invalid_message");
+      leads = leads.map((lead, i) => ({ ...lead, connection_owner_urn: msg.leads[i].connection_owner_urn, connected_at: msg.leads[i].connected_at }));
+    }
     await logEvent("capture.requested", `${requested} lead(s) captured on ${msg.pageType} for ${describeDestination(dest)}`, { pageType: msg.pageType, pageUrl: msg.pageUrl, requested, valid: leads.length, force: !!msg.force, importKind: msg.importKind ?? "manual", destination: dest.id });
     const skipped: string[] = [];
     const dedupe = activeDedupe(await loadDedupe(), settings.dedupeTtlDays, now);
@@ -428,7 +433,7 @@ async function handleCapture(msg: CaptureMsg): Promise<CaptureResponse> {
       import_id: importId,
       imported_by: settings.capturedBy || null,
       imported_at: new Date(now).toISOString(),
-      import_kind: msg.importKind === "basket" ? "basket" : "manual",
+      import_kind: connections ? "connections" : msg.importKind === "basket" ? "basket" : "manual",
       search_url: isList ? searchKey(msg.pageUrl) : null,
       search_name: isList ? searchName(msg.pageUrl, msg.pageType, typeof msg.pageTitle === "string" ? msg.pageTitle.slice(0, 200) : null) : null,
       list_id: rec?.list_id ?? null,
@@ -827,6 +832,35 @@ chrome.runtime.onMessage.addListener((msg: ContentToBackground, sender, sendResp
     const tabId = sender.tab?.id;
     const tabUrl = sender.tab?.url;
     switch (msg.type) {
+      case "CONNECTIONS_STATUS":
+        return fromExt ? connectionStatus() : { error: "forbidden" };
+      case "CONNECTIONS_STOP":
+        return fromExt ? stopConnections() : { error: "forbidden" };
+      case "CONNECTIONS_START": {
+        if (!fromExt) return { error: "forbidden" };
+        if (!Number.isSafeInteger(msg.tabId) || !Number.isSafeInteger(msg.limit) || msg.limit < 1 || msg.limit > 2000 || typeof msg.destinationId !== "string") return { error: "Choose a limit between 1 and 2,000." };
+        let destinationSnapshot = "";
+        return startConnections({
+          tabId: msg.tabId, limit: msg.limit,
+          prepare: async () => {
+            const tab = await chrome.tabs.get(msg.tabId);
+            if (!isAllowedPageUrl(tab.url, TEST_BUILD)) throw new Error("Open a LinkedIn tab first.");
+            const settings = await getSettings();
+            const dest = resolveDestination(settings, msg.destinationId);
+            const problem = await destinationProblem(dest);
+            if (problem || !dest) throw new Error(`Destination unavailable: ${problem ?? "no_destination"}`);
+            if (dest.kind === "deepline_play" && (!dest.input.acceptsLeads || unfillableRequired(dest.input, "leads").length)) throw new Error("Choose a play that accepts people.");
+            const remaining = settings.dailyCap - (await loadDaily()).queued;
+            if (msg.limit > remaining) throw new Error(`Only ${Math.max(0, remaining)} exports remain today. Lower the sync limit or change the export cap in Settings.`);
+            destinationSnapshot = JSON.stringify(dest);
+            return describeDestination(dest);
+          },
+          enqueue: async (leads, runId) => {
+            if (JSON.stringify(resolveDestination(await getSettings(), msg.destinationId)) !== destinationSnapshot) throw new Error("The destination changed. Sync stopped.");
+            return handleCapture({ type: "CAPTURE", leads, pageType: "connections", pageUrl: "https://www.linkedin.com/mynetwork/invite-connect/connections/", destinationId: msg.destinationId, importId: runId }, true);
+          }
+        });
+      }
       case "CAPTURE": {
         if (fromPage && (typeof msg.pageUrl !== "string" || !sameOrigin(msg.pageUrl, tabUrl))) return { ok: false, queued: 0, skippedDuplicates: [], rejectedReason: "invalid_message", remainingToday: 0 } satisfies CaptureResponse;
         // Pages send to the active destination only; choosing another is a panel privilege.

@@ -42,6 +42,8 @@ const LEAD_FIELD_ALIASES: Record<string, (lead: LeadRecord) => unknown> = {
   organization: (l) => l.company_name,
   company_linkedin_url: (l) => l.company_linkedin_url,
   location: (l) => l.location,
+  connection_owner_urn: (l) => l.connection_owner_urn ?? null,
+  connected_at: (l) => l.connected_at ?? null,
   connection_degree: (l) => l.connection_degree,
   profile_image_url: (l) => l.profile_image_url,
   about: (l) => l.about

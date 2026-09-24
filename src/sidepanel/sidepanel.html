@@ -165,6 +165,16 @@
 </div>
 
 <main>
+  <section aria-labelledby="connectionsTitle">
+    <h2 id="connectionsTitle">My connections</h2>
+    <div class="card">
+      <p class="muted small">Read your first-degree LinkedIn connections and send them to the destination above. This uses your signed-in session and can lead to account restrictions.</p>
+      <label class="small" for="connectionsLimit">Maximum connections to read</label>
+      <input id="connectionsLimit" type="number" min="1" max="2000" value="100" style="width:80px">
+      <div class="btn-row"><button id="connectionsStart" class="btn" type="button">Sync my connections</button><button id="connectionsStop" class="btn" type="button" hidden>Stop sync</button></div>
+      <p id="connectionsStatus" class="muted small" role="status" aria-live="polite">Starts only when you click. No scheduled sync.</p>
+    </div>
+  </section>
   <!-- First run: sign in, then pick a play -->
   <section id="signIn" hidden>
     <div class="card">

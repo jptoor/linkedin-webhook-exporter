@@ -14,15 +14,24 @@ to Deepline (the app you signed in to) and to any webhook you connect.
   `sales-api`, Voyager search and profile endpoints). A small script in the
   page context observes those responses passively so the extension can fill
   in what the page does not render, such as a person's public profile link.
-  It never sends a request to LinkedIn, never changes one, and ignores every
-  other URL. You can turn this off in Settings ("Use LinkedIn's own page
-  data"). Read `docs/RISK-REVIEW.md` before relying on it: it is the same
+  This passive observer never sends a request to LinkedIn, never changes one, and ignores every
+  other URL. Settings ("Use LinkedIn's own page data") disables use of intercepted
+  responses; the page hooks remain installed until the extension is disabled. Read `docs/RISK-REVIEW.md` before relying on it: it is the same
   technique commercial extensions use, and it is against LinkedIn's terms.
 - The link Sales Navigator's own "Share search" button copies, so a saved
   search can be forwarded by its shareable URL.
 
-It never reads LinkedIn cookies or session tokens, and never scrolls, pages
-or navigates on its own.
+**Explicit connections sync** reads the JavaScript-accessible `JSESSIONID`
+cookie in your LinkedIn tab as a CSRF value. It requests your current-user record
+and pages through your first-degree connections only after you click Sync. It
+collects names, profile URLs/identifiers, available headlines, connection dates,
+and the network owner's identifier. These records go to the selected destination
+through the existing queue. No LinkedIn cookie value leaves the content script,
+is stored in extension storage, or is sent to telemetry or a destination.
+
+Sync has a user-selected read limit, is single-flight, and stops on errors,
+rate limits, or account/session changes. There is no scheduled sync. Stopping
+collection does not retract records already queued for delivery.
 
 ## Deepline sign-in
 

@@ -11,7 +11,7 @@ Navigator search, lead list or LinkedIn people search and pushes them all at
 once, or hands a whole Sales Navigator search to a backend that fetches the
 members. The destination is a Deepline play run through the API with the
 org's API key, or any webhook (Clay, Zapier, a custom server) with signed
-JSON. The extension never pages through results itself, does not call
+JSON. Ordinary page capture never pages through results itself and does not call
 LinkedIn's private APIs, does not talk to any server of its own, and stores
 settings only in the local browser profile.
 
@@ -38,7 +38,7 @@ Goals
 Non-goals
 
 - Email or phone reveal. Send `linkedin_url` and let the play run a waterfall.
-- Any automation: no scrolling, paging, auto-visiting, connection requests or
+- Unattended automation: no scrolling, auto-visiting, connection requests or
   messages. (v0.1's browser-side "export all pages" was removed on purpose.)
 - Any hosted backend, account, or telemetry.
 - Firefox / Safari (MV3 Chromium only).
@@ -527,3 +527,33 @@ See `ACCEPTANCE_TESTS.md`. Every criterion maps to an automated test
   on-page dock depends on Chrome honoring the click as a user gesture.
 - v0.3 candidates: company pages, per-play field pickers, CSV fallback,
   Firefox build.
+
+## Explicit first-degree connection sync
+
+The side panel offers a user-started, bounded connection sync. Privileged runtime
+messages `CONNECTIONS_START { tabId, limit, destinationId }`, `CONNECTIONS_STATUS`,
+and `CONNECTIONS_STOP` are available only to extension pages. Page scripts and
+externally connected websites cannot start or stop a sync.
+
+The content script reads the JavaScript-accessible JSESSIONID CSRF value in
+memory, calls the fixed same-origin current-user and connections endpoints, and
+resolves normalized response entities by URN. Only edges referenced by the result
+list become records; malformed or unresolved edges fail the page. Requests never
+follow redirects and time out after 15 seconds. HTTP failures are not retried.
+No token is sent across the runtime message boundary or stored.
+
+The worker pins the destination and network owner for a run, admits each page
+through the existing export queue/cap/signing path, and publishes scalar progress
+in session storage. One run is allowed across all tabs/panels. Changed destinations,
+changed sessions, repeated edges and unexpected pagination stop the run. An
+interrupted worker never resumes collection automatically. A later explicit sync
+starts at offset zero; dedupe is scoped to owner plus profile URL. Already queued
+records retain ordinary webhook delivery retries when collection stops.
+
+Existing event envelopes remain unchanged. New enum values are `connections` for
+`source.page_type` and `import.import_kind`. Connection-sync leads add optional
+`connection_owner_urn` and `connected_at` fields and use `connection_degree: "1st"`.
+Mapped plays can request the two new fields; flat/generic payloads preserve them.
+Read limits are 1–2,000 and must fit the remaining daily export cap at start.
+The cap is not a LinkedIn safety threshold. This feature uses an unsupported
+private API; local fixture tests do not establish live compatibility or approval.

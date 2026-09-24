@@ -1,3 +1,4 @@
+import type { ConnectionSyncState } from "../shared/connections";
 /** Side panel for reps: what you are looking at, where it goes, one button.
  *  All state comes from the worker; page actions are relayed to the content
  *  script of the active tab. Vocabulary: push, selected, search import. */
@@ -450,6 +451,7 @@ function humanError(e: string): string {
 async function refreshState() {
   state = await msg<StateResponse>({ type: "GET_STATE" });
   renderAll();
+  await refreshConnections();
 }
 async function refreshBasket(b?: BasketResponse) {
   basket = b ?? (await msg<BasketResponse>({ type: "BASKET_GET" }));
@@ -608,3 +610,29 @@ setInterval(() => void refreshState(), 5000);
 // Errors in the panel are reported through the worker, like worker errors.
 window.addEventListener("error", (e) => void msg({ type: "PANEL_ERROR", message: String(e.message), stack: e.error instanceof Error ? e.error.stack : null }).catch(() => undefined));
 window.addEventListener("unhandledrejection", (e) => void msg({ type: "PANEL_ERROR", message: e.reason instanceof Error ? e.reason.message : String(e.reason), stack: e.reason instanceof Error ? (e.reason.stack ?? null) : null }).catch(() => undefined));
+
+async function refreshConnections() {
+  const sync = await msg<ConnectionSyncState>({ type: "CONNECTIONS_STATUS" });
+  const running = sync.status === "running";
+  $<HTMLButtonElement>("connectionsStart").disabled = running;
+  $("connectionsStop").hidden = !running;
+  $<HTMLInputElement>("connectionsLimit").disabled = running;
+  $("connectionsStatus").textContent = sync.status === "idle" ? "Starts only when you click. No scheduled sync." : `${sync.status}: ${sync.message} (${sync.scanned} read · ${sync.queued} queued · ${sync.skipped} already exported${sync.destination ? ` → ${sync.destination}` : ""})`;
+}
+$("connectionsStart").addEventListener("click", async () => {
+  const destinationId = state?.settings.activeDestinationId;
+  if (!destinationId || activeTabId == null) { $("connectionsStatus").textContent = "Choose a destination and open a LinkedIn tab first."; return; }
+  $<HTMLButtonElement>("connectionsStart").disabled = true;
+  let started = false;
+  try {
+    const result = await msg<ConnectionSyncState & { error?: string }>({ type: "CONNECTIONS_START", tabId: activeTabId, destinationId, limit: Number($<HTMLInputElement>("connectionsLimit").value) });
+    if (result.error) { $("connectionsStatus").textContent = result.error; return; }
+    started = true;
+    await refreshConnections();
+  } catch { $("connectionsStatus").textContent = "Could not start sync. Reload the extension panel."; }
+  finally { if (!started) $<HTMLButtonElement>("connectionsStart").disabled = false; }
+});
+$("connectionsStop").addEventListener("click", async () => {
+  await msg({ type: "CONNECTIONS_STOP" });
+  $("connectionsStatus").textContent = "Stopping… Previously queued records will still be delivered.";
+});

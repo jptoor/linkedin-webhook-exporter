@@ -24,6 +24,9 @@ export interface PageContext {
 }
 
 export type ContentToBackground =
+  | { type: "CONNECTIONS_START"; tabId: number; limit: number; destinationId: string }
+  | { type: "CONNECTIONS_STOP" }
+  | { type: "CONNECTIONS_STATUS" }
   | { type: "CAPTURE"; leads: LeadRecord[]; pageType: PageType; pageUrl: string; force?: boolean; importId?: string; importKind?: "manual" | "basket"; pageTitle?: string; destinationId?: string }
   | { type: "GET_STATE" }
   | { type: "GET_SETTINGS" }

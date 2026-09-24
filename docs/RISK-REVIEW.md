@@ -1,3 +1,10 @@
+> Update: explicit connection sync adds authenticated private-API reads. It uses
+> JSESSIONID as a local CSRF value, fetches first-degree connection pages on demand,
+> and uploads records through the existing queue. It can trigger restrictions.
+> There are no automatic collection retries or scheduled refreshes. The passive
+> observer comparisons below do not describe this new collection path.
+> The interception setting disables consumption, not the installed page hooks.
+
 # Risk review: Frontier-pattern layer (v0.3)
 
 Scope: the four capabilities added to match Frontier / Exportly's extension
