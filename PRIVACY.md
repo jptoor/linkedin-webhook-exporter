@@ -21,17 +21,25 @@ to Deepline (the app you signed in to) and to any webhook you connect.
 - The link Sales Navigator's own "Share search" button copies, so a saved
   search can be forwarded by its shareable URL.
 
-**Explicit connections sync** reads the JavaScript-accessible `JSESSIONID`
-cookie in your LinkedIn tab as a CSRF value. It requests your current-user record
-and pages through your first-degree connections only after you click Sync. It
-collects names, profile URLs/identifiers, available headlines, connection dates,
-and the network owner's identifier. These records go to the selected destination
-through the existing queue. No LinkedIn cookie value leaves the content script,
-is stored in extension storage, or is sent to telemetry or a destination.
+**Connections import** requires your official full data export. Select only
+Connections.csv: the panel parses it locally and previews the fields before
+confirmation. The worker validates it again. Names, profile URLs, company,
+position, connection date and your declared owner URL go to the selected
+destination. Email and unrelated columns are excluded. The raw CSV is not stored
+in extension storage. No private connections API or session token is used.
 
-Sync has a user-selected read limit, is single-flight, and stops on errors,
-rate limits, or account/session changes. There is no scheduled sync. Stopping
-collection does not retract records already queued for delivery.
+Stopping import does not retract records already queued. Ownership and archive
+completeness are user attestations, not independently verified facts. Local
+storage is restricted to trusted extension contexts; the browser profile still
+contains destination credentials and queued personal data.
+
+**Optional live connections sync** reads the JavaScript-accessible JSESSIONID
+CSRF value in the content script's memory and calls the private current-user and
+connections endpoints. It starts only after explicit confirmation in the side
+panel. It sends connection records and the owner's identifier to the selected
+destination; the session value is not stored or sent there. Errors and account
+changes stop collection, with no scheduled refresh or automatic collection retry.
+This option carries account-restriction risk; archive import is recommended.
 
 ## Deepline sign-in
 
@@ -71,7 +79,8 @@ your own receiver) is a separate data processor.
 
 ## Telemetry
 
-On by default, off in Settings. Two kinds:
+Off by default for new installs; existing explicit choices are preserved.
+Enable or disable it in Settings. Two kinds:
 
 - Usage events (`installed`, `signed_in`, `destination_connected`,
   `push_queued`, `search_import_started`) with the extension version, browser

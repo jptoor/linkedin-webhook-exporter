@@ -53,12 +53,14 @@ describe("queue transitions", () => {
     expect(nextWake([c])).toBeNull();
     expect(nextWake([claim(ni("s", "{}", [], 1, T), T)])).toBe(T + LEASE_MS);
   });
-  it("prune drops old sent items and caps size", () => {
+  it("prune caps sent history without dropping undelivered records", () => {
     const old = { ...ni("old", "{}", [], 1, 0), status: "sent" as const };
     const fresh = ni("fresh", "{}", [], 1, T);
     expect(prune([old, fresh], T + 2 * 86_400_000).map((i) => i.id)).toEqual(["fresh"]);
     const many = Array.from({ length: 600 }, (_, k) => ni(String(k), "{}", [], 1, k));
-    expect(prune(many, 0, 1e12, 500)).toHaveLength(500);
+    expect(prune(many, 0, 1e12, 500)).toHaveLength(600);
+    expect(prune(many.map(i => ({ ...i, status: "sent" as const })), 0, 1e12, 500)).toHaveLength(500);
+    expect(prune(many.map(i => ({ ...i, status: "failed" as const })), 0, 1e12, 500)).toHaveLength(600);
   });
   it("clearQueue: sent/failed remove that status; all keeps only in-flight fresh leases", () => {
     const items = [ni("p", "{}", [], 1, T), { ...ni("s", "{}", [], 1, T), status: "sent" as const }, { ...ni("f", "{}", [], 1, T), status: "failed" as const }, claim(ni("live", "{}", [], 1, T), T), { ...claim(ni("stale", "{}", [], 1, T), T - LEASE_MS * 2) }];

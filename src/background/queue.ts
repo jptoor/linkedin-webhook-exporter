@@ -54,7 +54,8 @@ export function nextWake(items: QueueItem[]): number | null {
 
 export function prune(items: QueueItem[], now: number, keepSentMs = 24 * 3600_000, maxItems = 500): QueueItem[] {
   const kept = items.filter((i) => !(i.status === "sent" && now - i.createdAt > keepSentMs));
-  return kept.length > maxItems ? kept.slice(kept.length - maxItems) : kept;
+  const retainedSent = new Set(kept.filter(i => i.status === "sent").slice(-maxItems).map(i => i.id));
+  return kept.filter(i => i.status !== "sent" || retainedSent.has(i.id));
 }
 
 /** Remove finished items. `all` clears everything except requests that are
@@ -68,4 +69,11 @@ export function counts(items: QueueItem[]): Record<QueueStatus, number> {
   const c: Record<QueueStatus, number> = { pending: 0, sending: 0, sent: 0, failed: 0 };
   for (const i of items) c[i.status]++;
   return c;
+}
+
+/** Pin routing, credentials and mapping without persisting another secret copy. */
+export async function destinationFingerprint(dest: Destination): Promise<string> {
+  const values = Object.entries(dest).filter(([key]) => !["name", "favorite"].includes(key)).sort(([a], [b]) => a.localeCompare(b));
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(values)));
+  return Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, "0")).join("");
 }

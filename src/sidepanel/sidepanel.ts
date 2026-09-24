@@ -1,4 +1,4 @@
-import type { ConnectionSyncState } from "../shared/connections";
+import { ARCHIVE_MAX_BYTES, parseConnectionsCsv, type ConnectionSyncState } from "../shared/connections";
 /** Side panel for reps: what you are looking at, where it goes, one button.
  *  All state comes from the worker; page actions are relayed to the content
  *  script of the active tab. Vocabulary: push, selected, search import. */
@@ -459,6 +459,7 @@ async function refreshBasket(b?: BasketResponse) {
   renderPage();
 }
 function renderAll() {
+  archiveControls();
   renderDest();
   renderPeople();
   renderPage();
@@ -611,28 +612,88 @@ setInterval(() => void refreshState(), 5000);
 window.addEventListener("error", (e) => void msg({ type: "PANEL_ERROR", message: String(e.message), stack: e.error instanceof Error ? e.error.stack : null }).catch(() => undefined));
 window.addEventListener("unhandledrejection", (e) => void msg({ type: "PANEL_ERROR", message: e.reason instanceof Error ? e.reason.message : String(e.reason), stack: e.reason instanceof Error ? (e.reason.stack ?? null) : null }).catch(() => undefined));
 
+let archiveCsv: string | null = null;
+let archiveCount = 0;
+let archiveRunning = false;
+let archiveGeneration = 0;
+let previewDestination: string | null = null;
+function archiveControls() {
+  const dest = state?.settings.destinations.find(d => d.id === state?.settings.activeDestinationId);
+  if (previewDestination !== JSON.stringify(dest)) {
+    $<HTMLInputElement>("connectionsConfirm").checked = false;
+    $<HTMLInputElement>("connectionsLiveConfirm").checked = false;
+    previewDestination = JSON.stringify(dest) ?? null;
+  }
+  $("connectionsDestination").textContent = dest ? `Destination: ${dest.name} (${dest.kind === "webhook" ? safeHost(dest.url) : dest.playName}). ${archiveCount} records in the file; ${state?.remainingToday ?? 0} exports remain today. Plays may use credits.` : "Choose a destination before importing.";
+  $<HTMLButtonElement>("connectionsStart").disabled = archiveRunning || !archiveCsv || !archiveCount || !dest || !$<HTMLInputElement>("connectionsConfirm").checked;
+  $("connectionsStop").hidden = !archiveRunning;
+  $<HTMLButtonElement>("connectionsLiveStart").disabled = archiveRunning || !dest || !$<HTMLInputElement>("connectionsLiveConfirm").checked;
+  for (const id of ["connectionsLimit", "connectionsLiveConfirm"]) $<HTMLInputElement>(id).disabled = archiveRunning;
+  for (const id of ["connectionsOwner", "connectionsFile", "connectionsConfirm"]) $<HTMLInputElement>(id).disabled = archiveRunning;
+}
+async function previewArchive() {
+  const generation = ++archiveGeneration;
+  archiveCsv = null; archiveCount = 0;
+  $<HTMLInputElement>("connectionsConfirm").checked = false;
+  $("connectionsSamples").replaceChildren();
+  archiveControls();
+  const file = $<HTMLInputElement>("connectionsFile").files?.[0];
+  if (!file) return;
+  try {
+    if (!/\.csv$/i.test(file.name) || file.size > ARCHIVE_MAX_BYTES) throw new Error("Choose only Connections.csv (up to 10 MB), not the ZIP archive.");
+    const csv = await file.text();
+    if (generation !== archiveGeneration) return;
+    const leads = parseConnectionsCsv(csv, $<HTMLInputElement>("connectionsOwner").value);
+    archiveCsv = csv; archiveCount = leads.length;
+    $("connectionsPreview").textContent = `${leads.length} connections ready. Sending: names, profile URLs, companies, positions, connection dates, and your declared profile URL. Email and all other columns are excluded. The file's completeness and ownership cannot be independently verified.`;
+    for (const lead of leads.slice(0, 5)) {
+      const item = document.createElement("li");
+      item.textContent = `${lead.full_name} · ${lead.company_name ?? "Unknown company"} · ${lead.connected_at}`;
+      $("connectionsSamples").appendChild(item);
+    }
+  } catch (error) { $("connectionsPreview").textContent = error instanceof Error ? error.message : "Could not read this export."; }
+  archiveControls();
+}
 async function refreshConnections() {
   const sync = await msg<ConnectionSyncState>({ type: "CONNECTIONS_STATUS" });
-  const running = sync.status === "running";
-  $<HTMLButtonElement>("connectionsStart").disabled = running;
-  $("connectionsStop").hidden = !running;
-  $<HTMLInputElement>("connectionsLimit").disabled = running;
-  $("connectionsStatus").textContent = sync.status === "idle" ? "Starts only when you click. No scheduled sync." : `${sync.status}: ${sync.message} (${sync.scanned} read · ${sync.queued} queued · ${sync.skipped} already exported${sync.destination ? ` → ${sync.destination}` : ""})`;
+  archiveRunning = sync.status === "running";
+  archiveControls();
+  $("connectionsStatus").textContent = sync.status === "idle" ? "Nothing is sent until you confirm and click Import." : `${sync.status}: ${sync.message} (${sync.scanned}/${sync.total ?? 0} processed · ${sync.queued} queued · ${sync.skipped} already exported${sync.destination ? ` → ${sync.destination}` : ""})`;
 }
+$("connectionsFile").addEventListener("change", () => void previewArchive());
+$("connectionsOwner").addEventListener("input", () => void previewArchive());
+$("connectionsConfirm").addEventListener("change", archiveControls);
 $("connectionsStart").addEventListener("click", async () => {
   const destinationId = state?.settings.activeDestinationId;
-  if (!destinationId || activeTabId == null) { $("connectionsStatus").textContent = "Choose a destination and open a LinkedIn tab first."; return; }
+  if (!archiveCsv || !destinationId || !$<HTMLInputElement>("connectionsConfirm").checked) return;
   $<HTMLButtonElement>("connectionsStart").disabled = true;
-  let started = false;
   try {
-    const result = await msg<ConnectionSyncState & { error?: string }>({ type: "CONNECTIONS_START", tabId: activeTabId, destinationId, limit: Number($<HTMLInputElement>("connectionsLimit").value) });
+    const result = await msg<ConnectionSyncState & { error?: string }>({ type: "CONNECTIONS_IMPORT", csv: archiveCsv, ownerUrl: $<HTMLInputElement>("connectionsOwner").value, confirmed: true, destinationId });
     if (result.error) { $("connectionsStatus").textContent = result.error; return; }
-    started = true;
+    $<HTMLInputElement>("connectionsConfirm").checked = false;
     await refreshConnections();
-  } catch { $("connectionsStatus").textContent = "Could not start sync. Reload the extension panel."; }
-  finally { if (!started) $<HTMLButtonElement>("connectionsStart").disabled = false; }
+  } catch { $("connectionsStatus").textContent = "Import interrupted. Check Recent activity before retrying."; }
+  finally { archiveControls(); }
 });
 $("connectionsStop").addEventListener("click", async () => {
   await msg({ type: "CONNECTIONS_STOP" });
   $("connectionsStatus").textContent = "Stopping… Previously queued records will still be delivered.";
+});
+
+$("connectionsLiveConfirm").addEventListener("change", archiveControls);
+$("connectionsLimit").addEventListener("input", () => {
+  $<HTMLInputElement>("connectionsLiveConfirm").checked = false;
+  archiveControls();
+});
+$("connectionsLiveStart").addEventListener("click", async () => {
+  const destinationId = state?.settings.activeDestinationId;
+  if (!destinationId || activeTabId == null || !$<HTMLInputElement>("connectionsLiveConfirm").checked) return;
+  const tabId = activeTabId;
+  $<HTMLInputElement>("connectionsLiveConfirm").checked = false;
+  archiveControls();
+  try {
+    const result = await msg<ConnectionSyncState & { error?: string }>({ type: "CONNECTIONS_START", tabId, destinationId, limit: Number($<HTMLInputElement>("connectionsLimit").value), confirmed: true });
+    if (result.error) { $("connectionsStatus").textContent = result.error; return; }
+    await refreshConnections();
+  } catch { $("connectionsStatus").textContent = "Live sync interrupted. Check Recent activity before starting again."; }
 });

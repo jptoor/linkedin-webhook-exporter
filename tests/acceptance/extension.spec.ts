@@ -740,6 +740,90 @@ test("page scripts cannot drive the extension: synthetic clicks and forged bridg
   expect(JSON.stringify(hook.received.slice(before))).not.toContain("Forged");
 });
 
+/* Archive import: local files and mock destinations, no live collection. */
+const archiveCsv = (n: number) => 'First Name,Last Name,URL,Email Address,Company,Position,Connected On\n' + Array.from({length:n}, (_,i) => `Person,${i},https://www.linkedin.com/in/archive-${i}/,private@example.com,Example,Director,01 Jan 2024`).join('\n');
+async function archiveFixture(n: number, dailyCap = 100) {
+  await configure(context, extensionId, { url: hook.url, signingSecret: SECRET, dailyCap });
+  const page = await context.newPage();
+  await page.goto(`${site.origin}/in/jane-doe-123/`);
+  const panel = await openPanelFor(context, extensionId, page);
+  await expect(panel.locator('#destName')).toHaveText('Hook');
+  await panel.locator('#connectionsOwner').fill('https://www.linkedin.com/in/network-owner/');
+  await panel.locator('#connectionsFile').setInputFiles({name:'Connections.csv',mimeType:'text/csv',buffer:Buffer.from(archiveCsv(n))});
+  await expect(panel.locator('#connectionsPreview')).toContainText(`${n} connections ready`);
+  return panel;
+}
+test('archive: local preview, explicit confirmation, signed delivery and dedupe', async () => {
+  const panel = await archiveFixture(3);
+  await expect(panel.locator('#connectionsStart')).toBeDisabled();
+  expect(hook.received).toHaveLength(0);
+  await panel.locator('#connectionsConfirm').check();
+  await panel.locator('#connectionsStart').click();
+  await expect(panel.locator('#connectionsStatus')).toContainText('All file records processed');
+  const [req] = await hook.waitFor(3);
+  expect(req.headers['x-lwe-signature']).toBe('sha256=' + hmacHex(SECRET, `${req.headers['x-lwe-timestamp']}.${req.body}`));
+  expect(hook.leads[0].json.lead).toMatchObject({connection_source:'archive',connection_owner_url:'https://www.linkedin.com/in/network-owner',connected_at:'2024-01-01',connection_degree:'1st'});
+  expect(JSON.stringify(hook.received)).not.toContain('private@example.com');
+  expect(JSON.stringify(await readStorage(context, extensionId))).not.toContain('private@example.com');
+  await expect(panel.locator('#connectionsStart')).toBeDisabled();
+  await panel.locator('#connectionsConfirm').check();
+  await panel.locator('#connectionsStart').click();
+  await expect(panel.locator('#connectionsStatus')).toContainText('3 already exported');
+  expect(hook.leads).toHaveLength(3);
+  await panel.setViewportSize({width:400,height:950});
+  await panel.screenshot({path:'test-results/archive-import.png',fullPage:true});
+});
+test('archive: rejects live sync and archive import without consent', async () => {
+  await archiveFixture(1);
+  const live = await sendMessage(context, extensionId, {type:'CONNECTIONS_START',destinationId:'w1',tabId:1,limit:100});
+  expect(live.error).toContain('Confirm the live sync risks');
+  const unconfirmed = await sendMessage(context, extensionId, {type:'CONNECTIONS_IMPORT',csv:archiveCsv(1),ownerUrl:'https://www.linkedin.com/in/owner',destinationId:'w1',confirmed:false});
+  expect(unconfirmed.error).toBeTruthy();
+  expect(hook.received).toHaveLength(0);
+});
+test('archive: malformed file and ZIP cannot be admitted', async () => {
+  const panel = await archiveFixture(1);
+  await panel.locator('#connectionsFile').setInputFiles({name:'Connections.csv',mimeType:'text/csv',buffer:Buffer.from(archiveCsv(1)+'\nBad,row')});
+  await expect(panel.locator('#connectionsPreview')).not.toContainText('connections ready');
+  await expect(panel.locator('#connectionsStart')).toBeDisabled();
+  await panel.locator('#connectionsFile').setInputFiles({name:'archive.zip',mimeType:'application/zip',buffer:Buffer.from('not a CSV')});
+  await expect(panel.locator('#connectionsPreview')).toContainText('not the ZIP');
+  expect(hook.received).toHaveLength(0);
+});
+test('archive: daily cap reports partial progress and reimport continues with dedupe', async () => {
+  const panel = await archiveFixture(3, 2);
+  await panel.locator('#connectionsConfirm').check();
+  await panel.locator('#connectionsStart').click();
+  await expect(panel.locator('#connectionsStatus')).toContainText('2 of 3 file records processed');
+  await hook.waitFor(2);
+  await setSettings(context, extensionId, {dailyCap:10});
+  await panel.locator('#connectionsConfirm').check();
+  await panel.locator('#connectionsStart').click();
+  await expect(panel.locator('#connectionsStatus')).toContainText('All file records processed');
+  await hook.waitFor(3);
+  expect(hook.leads).toHaveLength(3);
+});
+
+test('guardrail: editing a queued destination cannot reroute its records', async () => {
+  await configure(context, extensionId, {url:hook.url, signingSecret:SECRET});
+  hook.failNext = [503];
+  const page = await context.newPage();
+  await page.goto(`${site.origin}/in/jane-doe-123/`);
+  await clickPush(page);
+  await hook.waitFor(1);
+  const original = (await readStorage(context, extensionId)).settings.destinations;
+  await setSettings(context, extensionId, {destinations:original.map((d: any) => ({...d,url:hook.url+'?different-recipient=1'}))});
+  await sendMessage(context, extensionId, {type:'RETRY_NOW'});
+  const blocked = await readStorage(context, extensionId);
+  expect(blocked.queue[0].status).toBe('failed');
+  expect(blocked.queue[0].lastError).toContain('destination_changed_or_unverified');
+  expect(hook.received).toHaveLength(1);
+  await setSettings(context, extensionId, {destinations:original});
+  await sendMessage(context, extensionId, {type:'RETRY_NOW'});
+  await hook.waitFor(2);
+  expect(hook.received[1].body).toBe(hook.received[0].body);
+});
+
 /* Explicit connections sync: localhost fixtures only, never real LinkedIn. */
 async function connectionFixture(total: number, failPage = -1, failureStatus = 429) {
   await configure(context, extensionId, { url: hook.url, signingSecret: SECRET, dailyCap: 100 });
@@ -766,6 +850,7 @@ async function connectionFixture(total: number, failPage = -1, failureStatus = 4
   const panel = await openPanelFor(context, extensionId, page);
   await expect(panel.locator("#destName")).toHaveText("Hook");
   await panel.setViewportSize({ width: 380, height: 800 });
+  await panel.locator("#connectionsLiveOptions summary").click();
   return { page, panel, calls, account };
 }
 
@@ -773,7 +858,8 @@ test("connections sync: explicit start, paged collection, signed delivery, metad
   const { panel, calls } = await connectionFixture(43);
   expect(calls).toEqual([]);
   await panel.locator("#connectionsLimit").fill("43");
-  await panel.locator("#connectionsStart").click();
+  await panel.locator("#connectionsLiveConfirm").check();
+  await panel.locator("#connectionsLiveStart").click();
   await expect(panel.locator("#connectionsStatus")).toContainText("End of network reached");
   await hook.waitFor(43);
   expect(calls).toEqual([0, 40]);
@@ -781,7 +867,8 @@ test("connections sync: explicit start, paged collection, signed delivery, metad
   expect(JSON.stringify(hook.received)).not.toContain("fixture-csrf");
   const stored = await readStorage(context, extensionId);
   expect(JSON.stringify(stored)).not.toContain("fixture-csrf");
-  await panel.locator("#connectionsStart").click();
+  await panel.locator("#connectionsLiveConfirm").check();
+  await panel.locator("#connectionsLiveStart").click();
   await expect(panel.locator("#connectionsStatus")).toContainText("43 already exported");
   expect(hook.leads).toHaveLength(43);
   await panel.screenshot({ path: "test-results/connections-sync.png", fullPage: true });
@@ -790,7 +877,8 @@ test("connections sync: explicit start, paged collection, signed delivery, metad
 test("connections sync: a rate limit stops collection without retry or false success", async () => {
   const { panel, calls } = await connectionFixture(80, 40);
   await panel.locator("#connectionsLimit").fill("80");
-  await panel.locator("#connectionsStart").click();
+  await panel.locator("#connectionsLiveConfirm").check();
+  await panel.locator("#connectionsLiveStart").click();
   await expect(panel.locator("#connectionsStatus")).toContainText("HTTP 429");
   expect(calls).toEqual([0, 40]);
   await hook.waitFor(40);
@@ -800,10 +888,13 @@ test("connections sync: a rate limit stops collection without retry or false suc
 
 test("connections sync: stop and concurrent start cannot create overlapping crawls", async () => {
   const { panel, calls } = await connectionFixture(100);
-  await panel.locator("#connectionsStart").click();
+  await panel.locator("#connectionsLiveConfirm").check();
+  await panel.locator("#connectionsLiveStart").click();
   await expect.poll(() => calls.length).toBe(1);
-  const duplicate = await sendMessage(context, extensionId, { type: "CONNECTIONS_START", tabId: 1, destinationId: "w1", limit: 100 });
+  const duplicate = await sendMessage(context, extensionId, { type: "CONNECTIONS_START", tabId: 1, destinationId: "w1", limit: 100, confirmed: true });
   expect(duplicate.error).toContain("already running");
+  const archiveOverlap = await sendMessage(context, extensionId, { type: "CONNECTIONS_IMPORT", csv: archiveCsv(1), ownerUrl: "https://www.linkedin.com/in/owner", confirmed: true, destinationId: "hook" });
+  expect(archiveOverlap.error).toContain("already running");
   await panel.locator("#connectionsStop").click();
   await expect(panel.locator("#connectionsStatus")).toContainText("stopped:");
   expect(calls).toEqual([0]);
@@ -812,7 +903,8 @@ test("connections sync: stop and concurrent start cannot create overlapping craw
 for (const httpStatus of [401, 403]) {
   test(`connections sync: HTTP ${httpStatus} ends collection without retry`, async () => {
     const { panel, calls } = await connectionFixture(10, 0, httpStatus);
-    await panel.locator("#connectionsStart").click();
+    await panel.locator("#connectionsLiveConfirm").check();
+  await panel.locator("#connectionsLiveStart").click();
     await expect(panel.locator("#connectionsStatus")).toContainText(`HTTP ${httpStatus}`);
     expect(calls).toEqual([0]);
     expect(hook.leads).toHaveLength(0);
@@ -821,7 +913,8 @@ for (const httpStatus of [401, 403]) {
 
 test("connections sync: session changes stop before another connection request", async () => {
   const { panel, calls } = await connectionFixture(100);
-  await panel.locator("#connectionsStart").click();
+  await panel.locator("#connectionsLiveConfirm").check();
+  await panel.locator("#connectionsLiveStart").click();
   await expect.poll(() => calls.length).toBe(1);
   await hook.waitFor(40);
   await context.addCookies([{ name: "JSESSIONID", value: '"different-account"', url: site.origin }]);
@@ -833,7 +926,8 @@ test("connections sync: session changes stop before another connection request",
 test("connections sync: export cap is checked before collecting any data", async () => {
   const { panel, calls } = await connectionFixture(100);
   await panel.locator("#connectionsLimit").fill("101");
-  await panel.locator("#connectionsStart").click();
+  await panel.locator("#connectionsLiveConfirm").check();
+  await panel.locator("#connectionsLiveStart").click();
   await expect(panel.locator("#connectionsStatus")).toContainText("Only 100 exports remain");
   expect(calls).toEqual([]);
   expect(hook.leads).toHaveLength(0);
@@ -841,7 +935,8 @@ test("connections sync: export cap is checked before collecting any data", async
 
 test("connections sync: owner change with the same CSRF value stops before another page", async () => {
   const { panel, calls, account } = await connectionFixture(100);
-  await panel.locator("#connectionsStart").click();
+  await panel.locator("#connectionsLiveConfirm").check();
+  await panel.locator("#connectionsLiveStart").click();
   await hook.waitFor(40);
   account.urn = "urn:li:fs_miniProfile:other5678";
   await expect(panel.locator("#connectionsStatus")).toContainText("account changed");

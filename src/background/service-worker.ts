@@ -1,3 +1,4 @@
+import { parseConnectionsCsv } from "../shared/connections";
 import { connectionStatus, startConnections, stopConnections } from "./connections";
 declare const __EXTENSION_VERSION__: string;
 declare const __TEST_BUILD__: boolean;
@@ -15,7 +16,7 @@ import { isAllowedPageUrl, isPageType, validateLead, validateLeads } from "../sh
 import { fetchSession, identityKey, isDeeplineTab, keySession, pollClaim, registerDevice, signInUrl, type Connection, type PendingClaim, type SessionState } from "./auth";
 import { withLock } from "./lock";
 import { clearLog, logEvent, readLog } from "../shared/log";
-import { afterAttempt, claim, clearQueue, due, newItem, nextWake, prune, recoverStaleLeases } from "./queue";
+import { afterAttempt, claim, clearQueue, destinationFingerprint, due, newItem, nextWake, prune, recoverStaleLeases } from "./queue";
 import { playRunBody, sendBody } from "./sender";
 
 const VERSION = typeof __EXTENSION_VERSION__ === "string" ? __EXTENSION_VERSION__ : "dev";
@@ -24,6 +25,9 @@ const ALARM = "lwe-flush";
 const CLAIM_ALARM = "lwe-claim";
 const KEYS = { queue: "queue", dedupe: "dedupe", daily: "daily", anonymousId: "anonymousId", connection: "connection" } as const;
 const SESSION_KEYS = { basket: "basket", shareLinks: "shareLinks", auth: "auth", claim: "claim" } as const;
+
+// Credential-bearing local storage must not be readable by content scripts.
+const storageReady = chrome.storage.local.setAccessLevel ? chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" }) : Promise.resolve();
 
 /* ------------------------------------------------------------ storage */
 
@@ -368,7 +372,7 @@ function enqueueLeads(dest: Destination, settings: Settings, leads: LeadRecord[]
   return { queued: leads.length, eventIds };
 }
 
-async function handleCapture(msg: CaptureMsg, connections = false): Promise<CaptureResponse> {
+async function handleCapture(msg: CaptureMsg, connections = false, expectedDestination?: string): Promise<CaptureResponse> {
   return withLock(async () => {
     const settings = await getSettings();
     const now = Date.now();
@@ -382,6 +386,7 @@ async function handleCapture(msg: CaptureMsg, connections = false): Promise<Capt
     };
     if (!isPageType(msg.pageType) || !isAllowedPageUrl(msg.pageUrl, TEST_BUILD)) return reject("invalid_message");
     const dest = resolveDestination(settings, msg.destinationId);
+    if (expectedDestination && JSON.stringify(dest) !== expectedDestination) throw new Error("The destination changed. Preview and confirm again.");
     const problem = await destinationProblem(dest);
     if (problem || !dest) return reject(problem ?? "no_destination");
     const identity = usesSession(dest) ? identityKey(sessionCache) : null;
@@ -395,7 +400,7 @@ async function handleCapture(msg: CaptureMsg, connections = false): Promise<Capt
     let leads = validateLeads(msg.leads);
     if (connections) {
       if (leads.length !== msg.leads.length) return reject("invalid_message");
-      leads = leads.map((lead, i) => ({ ...lead, connection_owner_urn: msg.leads[i].connection_owner_urn, connected_at: msg.leads[i].connected_at }));
+      leads = leads.map((lead, i) => ({ ...lead, connection_owner_urn: msg.leads[i].connection_owner_urn, connection_owner_url: msg.leads[i].connection_owner_url, connection_source: msg.leads[i].connection_source, connected_at: msg.leads[i].connected_at }));
     }
     await logEvent("capture.requested", `${requested} lead(s) captured on ${msg.pageType} for ${describeDestination(dest)}`, { pageType: msg.pageType, pageUrl: msg.pageUrl, requested, valid: leads.length, force: !!msg.force, importKind: msg.importKind ?? "manual", destination: dest.id });
     const skipped: string[] = [];
@@ -442,9 +447,12 @@ async function handleCapture(msg: CaptureMsg, connections = false): Promise<Capt
 
     const queue = recoverStaleLeases(await loadQueue(), now);
     const enq = enqueueLeads(dest, settings, leads, source, imp, !!msg.force, now, queue, dedupe, identity);
-    await saveDedupe(dedupe);
-    await saveDaily({ ...daily, queued: daily.queued + leads.length });
-    await saveQueue(prune(queue, now));
+    const fingerprint = await destinationFingerprint(dest);
+    for (const item of queue) if (enq.eventIds.includes(item.id)) item.destinationFingerprint = fingerprint;
+    if (new TextEncoder().encode(JSON.stringify(queue)).byteLength > 6 * 1024 * 1024) return reject("invalid_message", {}, "Delivery queue is full. Wait for delivery, clear completed history, then import again. No records in this batch were queued.");
+    const retained = prune(queue, now);
+    await chrome.storage.local.set({ [KEYS.dedupe]: dedupe, [KEYS.daily]: { ...daily, queued: daily.queued + leads.length }, [KEYS.queue]: retained });
+    await scheduleAlarm(retained);
     await logEvent("capture.queued", `${leads.length} lead(s) queued for ${describeDestination(dest)}`, { count: leads.length, importId, importKind: imp.import_kind, searchName: imp.search_name, events: enq.eventIds, leads: leads.map(dedupeKey), remainingToday: remaining - leads.length, destination: dest.id });
     void flush();
     broadcast({ type: "STATE_CHANGED" });
@@ -491,9 +499,11 @@ async function handleSearchCapture(msg: SearchMsg): Promise<SearchCaptureRespons
     const body = dest.kind === "webhook" ? JSON.stringify(buildSearchBody(record, dest.mappingPreset, source, settings.customFields, eventId, new Date(now).toISOString(), imp)) : playRunBody(dest, buildSearchRun(dest.input, record, source, imp, settings.customFields, name));
     const queue = recoverStaleLeases(await loadQueue(), now);
     queue.push(newItem(eventId, body, [key], 0, now, key, dest, `search: ${name ?? record.search_url}`, identity));
+    queue[queue.length - 1].destinationFingerprint = await destinationFingerprint(dest);
     dedupe[key] = { t: now, confirmed: false, item: eventId };
-    await saveDedupe(dedupe);
-    await saveQueue(prune(queue, now));
+    const retained = prune(queue, now);
+    await chrome.storage.local.set({ [KEYS.dedupe]: dedupe, [KEYS.queue]: retained });
+    await scheduleAlarm(retained);
     await logEvent("search.saved", `Search sent to ${describeDestination(dest)}: ${name ?? record.search_url} (limit ${limit})`, { eventId, pageType: msg.pageType, searchUrl: record.search_url, totalHint: hint, limit, savedSearchId: savedId, destination: dest.id });
     void flush();
     broadcast({ type: "STATE_CHANGED" });
@@ -691,7 +701,7 @@ async function flush(): Promise<void> {
       // A run queued on the rep's sign-in goes out only under that same
       // user and org. Signed out or switched account: fail it, never retry.
       const identityProblem = usesSession(claimed.dest) && (claimed.item.sessionIdentity ?? null) !== (await currentIdentity());
-      const result = identityProblem ? { ok: false, status: null, retryable: false, error: sessionCache?.signedIn ? "account_changed" : "signed_out" } : await sendBody(await withKey(claimed.dest), claimed.item.body, claimed.item.id, { version: VERSION, dedupeKey: claimed.item.dedupeKey });
+      const result = identityProblem ? { ok: false, status: null, retryable: false, error: sessionCache?.signedIn ? "account_changed" : "signed_out" } : claimed.item.destinationFingerprint !== await destinationFingerprint(claimed.dest) ? { ok: false, status: null, retryable: false, error: "destination_changed_or_unverified: restore the approved configuration or review and reimport" } : await sendBody(await withKey(claimed.dest), claimed.item.body, claimed.item.id, { version: VERSION, dedupeKey: claimed.item.dedupeKey });
       await withLock(async () => {
         const now = Date.now();
         const items = await loadQueue();
@@ -826,6 +836,7 @@ function isContentPage(sender: chrome.runtime.MessageSender): boolean {
 chrome.runtime.onMessage.addListener((msg: ContentToBackground, sender, sendResponse) => {
   (async () => {
     if (sender.id !== chrome.runtime.id || !msg || typeof msg !== "object" || typeof msg.type !== "string") return { error: "invalid_sender" };
+    await storageReady;
     const fromExt = isExtensionPage(sender);
     const fromPage = !fromExt && isContentPage(sender);
     if (!fromPage && !fromExt) return { error: "invalid_sender" };
@@ -838,12 +849,13 @@ chrome.runtime.onMessage.addListener((msg: ContentToBackground, sender, sendResp
         return fromExt ? stopConnections() : { error: "forbidden" };
       case "CONNECTIONS_START": {
         if (!fromExt) return { error: "forbidden" };
-        if (!Number.isSafeInteger(msg.tabId) || !Number.isSafeInteger(msg.limit) || msg.limit < 1 || msg.limit > 2000 || typeof msg.destinationId !== "string") return { error: "Choose a limit between 1 and 2,000." };
+        if (msg.confirmed !== true) return { error: "Confirm the live sync risks before starting. Archive import is recommended." };
+        if (!Number.isSafeInteger(msg.tabId) || !Number.isSafeInteger(msg.limit) || msg.limit! < 1 || msg.limit! > 2000 || typeof msg.destinationId !== "string") return { error: "Choose a limit between 1 and 2,000." };
         let destinationSnapshot = "";
         return startConnections({
-          tabId: msg.tabId, limit: msg.limit,
+          tabId: msg.tabId!, limit: msg.limit!,
           prepare: async () => {
-            const tab = await chrome.tabs.get(msg.tabId);
+            const tab = await chrome.tabs.get(msg.tabId!);
             if (!isAllowedPageUrl(tab.url, TEST_BUILD)) throw new Error("Open a LinkedIn tab first.");
             const settings = await getSettings();
             const dest = resolveDestination(settings, msg.destinationId);
@@ -851,17 +863,38 @@ chrome.runtime.onMessage.addListener((msg: ContentToBackground, sender, sendResp
             if (problem || !dest) throw new Error(`Destination unavailable: ${problem ?? "no_destination"}`);
             if (dest.kind === "deepline_play" && (!dest.input.acceptsLeads || unfillableRequired(dest.input, "leads").length)) throw new Error("Choose a play that accepts people.");
             const remaining = settings.dailyCap - (await loadDaily()).queued;
-            if (msg.limit > remaining) throw new Error(`Only ${Math.max(0, remaining)} exports remain today. Lower the sync limit or change the export cap in Settings.`);
+            if (msg.limit! > remaining) throw new Error(`Only ${Math.max(0, remaining)} exports remain today. Lower the sync limit or change the export cap in Settings.`);
             destinationSnapshot = JSON.stringify(dest);
             return describeDestination(dest);
           },
-          enqueue: async (leads, runId) => {
-            if (JSON.stringify(resolveDestination(await getSettings(), msg.destinationId)) !== destinationSnapshot) throw new Error("The destination changed. Sync stopped.");
-            return handleCapture({ type: "CAPTURE", leads, pageType: "connections", pageUrl: "https://www.linkedin.com/mynetwork/invite-connect/connections/", destinationId: msg.destinationId, importId: runId }, true);
+          enqueue: (records, runId) => handleCapture({ type: "CAPTURE", leads: records, pageType: "connections", pageUrl: "https://www.linkedin.com/mynetwork/invite-connect/connections/", destinationId: msg.destinationId, importId: runId }, true, destinationSnapshot)
+        });
+      }
+      case "CONNECTIONS_IMPORT": {
+        if (!fromExt) return { error: "forbidden" };
+        if (msg.confirmed !== true || typeof msg.csv !== "string" || typeof msg.ownerUrl !== "string" || typeof msg.destinationId !== "string") return { error: "Preview your Connections.csv and confirm ownership before importing." };
+        const leads = parseConnectionsCsv(msg.csv, msg.ownerUrl);
+        let destinationSnapshot = "";
+        return startConnections({
+          leads,
+          remaining: async () => (await getSettings()).dailyCap - (await loadDaily()).queued,
+          prepare: async () => {
+            const settings = await getSettings();
+            const dest = resolveDestination(settings, msg.destinationId);
+            const problem = await destinationProblem(dest);
+            if (problem || !dest) throw new Error(`Destination unavailable: ${problem ?? "no_destination"}`);
+            if (dest.kind === "deepline_play" && (!dest.input.acceptsLeads || unfillableRequired(dest.input, "leads").length)) throw new Error("Choose a play that accepts people.");
+            destinationSnapshot = JSON.stringify(dest);
+            return describeDestination(dest);
+          },
+          enqueue: async (records, runId) => {
+            if (JSON.stringify(resolveDestination(await getSettings(), msg.destinationId)) !== destinationSnapshot) throw new Error("The destination changed. Import stopped.");
+            return handleCapture({ type: "CAPTURE", leads: records, pageType: "connections", pageUrl: "https://www.linkedin.com/mynetwork/invite-connect/connections/", destinationId: msg.destinationId, importId: runId }, true, destinationSnapshot);
           }
         });
       }
       case "CAPTURE": {
+        if (msg.pageType === "connections") return { error: "Use the connections import or confirmed live sync flow." };
         if (fromPage && (typeof msg.pageUrl !== "string" || !sameOrigin(msg.pageUrl, tabUrl))) return { ok: false, queued: 0, skippedDuplicates: [], rejectedReason: "invalid_message", remainingToday: 0 } satisfies CaptureResponse;
         // Pages send to the active destination only; choosing another is a panel privilege.
         return handleCapture(fromPage ? { ...msg, destinationId: undefined } : msg);
@@ -1016,6 +1049,12 @@ function sameOrigin(a: unknown, b: string | undefined): boolean {
     return false;
   }
 }
+
+// Content scripts cannot observe credential-bearing local storage directly.
+// Send only an invalidation; they fetch the sanitized settings projection.
+chrome.storage.onChanged?.addListener((changes, area) => {
+  if (area === "local" && "settings" in changes) void notifyTabs({ type: "SETTINGS_CHANGED" });
+});
 
 chrome.tabs?.onRemoved?.addListener((tabId) => {
   contexts.delete(tabId);

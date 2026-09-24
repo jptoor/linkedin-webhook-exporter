@@ -166,14 +166,33 @@
 
 <main>
   <section aria-labelledby="connectionsTitle">
-    <h2 id="connectionsTitle">My connections</h2>
+    <h2 id="connectionsTitle">Connections</h2>
+    <p class="small">Recommended: import your full connections archive.</p>
     <div class="card">
-      <p class="muted small">Read your first-degree LinkedIn connections and send them to the destination above. This uses your signed-in session and can lead to account restrictions.</p>
-      <label class="small" for="connectionsLimit">Maximum connections to read</label>
-      <input id="connectionsLimit" type="number" min="1" max="2000" value="100" style="width:80px">
-      <div class="btn-row"><button id="connectionsStart" class="btn" type="button">Sync my connections</button><button id="connectionsStop" class="btn" type="button" hidden>Stop sync</button></div>
-      <p id="connectionsStatus" class="muted small" role="status" aria-live="polite">Starts only when you click. No scheduled sync.</p>
+      <ol class="small">
+        <li><a href="https://www.linkedin.com/mypreferences/d/download-my-data" target="_blank" rel="noopener noreferrer">Request your full connections export</a> in Settings &amp; Privacy → Data privacy → Download your data. Select “Download larger data archive, including connections,” then Request archive.</li>
+        <li>Wait for the download email, download the archive, and extract <b>Connections.csv</b>.</li>
+        <li>Choose only that CSV below. The full ZIP, messages, email addresses, and other archive files are not uploaded.</li>
+      </ol>
+      <label class="small" for="connectionsOwner">Your profile URL (owner of this export)</label>
+      <input id="connectionsOwner" type="url" placeholder="https://www.linkedin.com/in/your-profile" style="width:100%;box-sizing:border-box">
+      <label class="small" for="connectionsFile">Connections.csv</label>
+      <input id="connectionsFile" type="file" accept=".csv,text/csv" style="max-width:100%">
+      <p class="small" id="connectionsPreview" role="status">Preview locally before sending. No account crawling or session-cookie access.</p>
+      <ul class="small" id="connectionsSamples"></ul>
+      <label class="small"><input id="connectionsConfirm" type="checkbox"> This is my full connections export, and I approve sending the previewed records to the destination shown below.</label>
+      <p id="connectionsDestination" class="small"></p>
+      <div class="btn-row"><button id="connectionsStart" class="btn" type="button" disabled>Import connections</button><button id="connectionsStop" class="btn" type="button" hidden>Stop</button></div>
+      <p id="connectionsStatus" class="muted small" role="status" aria-live="polite">Nothing is sent until you confirm and click Import.</p>
     </div>
+    <details id="connectionsLiveOptions" class="card">
+      <summary>Optional: sync connections from your signed-in account</summary>
+      <p class="small">This uses an unsupported private API and can lead to account restrictions. Archive import above is recommended. No scheduled sync or automatic retry; errors, challenges, or account changes stop collection.</p>
+      <label class="small" for="connectionsLimit">Maximum connections to read (1–2,000)</label>
+      <input id="connectionsLimit" type="number" min="1" max="2000" value="100">
+      <label class="small" style="display:block;margin:8px 0"><input id="connectionsLiveConfirm" type="checkbox"> I understand the account risk and approve this live sync to the selected destination.</label>
+      <button id="connectionsLiveStart" class="btn" type="button" disabled>Sync my connections</button>
+    </details>
   </section>
   <!-- First run: sign in, then pick a play -->
   <section id="signIn" hidden>
