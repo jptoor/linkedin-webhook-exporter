@@ -1,226 +1,140 @@
-<p><img src="src/brand/deepline-wordmark.svg" alt="Deepline" height="22"></p>
+# People Exporter
 
-# Deepline for LinkedIn
+Open-source Chrome extension (MIT) for collecting people from supported profile
+and search pages and sending them to a configured workflow or webhook. Select
+people across pages, forward a search to a backend, or explicitly sync your
+first-degree connections from the side panel.
 
-Open-source Chrome extension (MIT) that lets a sales rep push the people they
-are looking at on LinkedIn or Sales Navigator into a
-[Deepline](https://deepline.com) play, or to any webhook (Clay, Zapier, your
-own server), from a side panel. Pick a few people across several result
-pages, push them with one button, or hand a whole Sales Navigator search to
-Deepline and let the backend fetch the members.
+Settings live in your browser profile. Usage reporting is enabled by default
+and can be disabled in Settings. See [PRIVACY.md](PRIVACY.md) for data handling,
+authentication, and reporting details.
 
-No account of its own and no server of its own: it follows your Deepline
-sign-in. Settings live in your browser profile only. Anonymous usage events
-and error reports go to Deepline unless you turn them off (see PRIVACY.md).
+## Features
 
-> **Read before using.** LinkedIn's [User Agreement](https://www.linkedin.com/legal/user-agreement)
-> prohibits browser extensions that scrape or automate its service, and
-> LinkedIn [restricts accounts](https://www.linkedin.com/help/linkedin/answer/a1341387)
-> that use them. This tool reads only what your browser already renders and
-> acts only when you click. Explicit connection sync pages through your network,
-> but **no daily cap or dedupe setting makes that compliant or prevents a
-> restriction.** Use it where you have the right to, at your own risk, with
-> your own LinkedIn account. See [PRIVACY.md](PRIVACY.md).
+- **Side panel:** shows the current page, selected destination, and send action.
+- **Selection across pages:** collect people from multiple result pages and send
+  them together. Selections clear when the browser closes.
+- **Search import:** forward a shareable search URL, filters, and requested limit
+  to a backend that retrieves the results.
+- **Connection sync:** explicitly read first-degree connections and send them
+  through the delivery queue, with a read limit and a Stop button.
+- **Workflow destinations:** choose a configured workflow. Its input schema
+  determines whether it receives a batch, an individual person, or a search.
+- **Signed webhooks:** send nested or flat JSON with optional authentication
+  headers and request signatures.
+- **Recent activity:** inspect delivery status and retry failed deliveries.
+  Full history is available in Settings with secrets redacted.
+- **Page data:** supplement visible content with responses the supported page
+  already loads. The setting disables use of intercepted responses; the page
+  hooks remain installed until the extension is disabled.
 
-## What a rep sees
-
-- **Side panel** (toolbar icon or the dock in the corner of the page): what
-  you are looking at, where it goes, and one pinned button that says exactly
-  what will happen: "Push 4 people to Warm intro".
-- **Pick people across pages**: a round "+" on every result row (Sales
-  Navigator's own checkboxes work too). Picks stay while you move between
-  pages; push them all at once. Cleared when the browser closes.
-- **Import a whole search**: on a Sales Navigator search, set "up to N
-  people" and click Import search. The search URL and filters go to the play
-  you chose; Deepline fetches the members in the background. For a saved
-  search, press Sales Navigator's own "Share search" once so the shareable
-  link (with the full query) is sent instead of the private deep link.
-- **Plays, not URLs**: sign in to Deepline once and pick a play from the
-  panel; the extension follows your sign-in, so there is nothing to paste.
-  Switch between plays from the "Sending to" chip; pin favourites. Webhooks
-  with signing secrets and extra headers stay available under "Send to
-  another tool" for everyone else.
-- **Recent**: every push with a plain status (Sent, Running, Retrying,
-  Failed) and a retry link. Full history with secrets redacted in Settings.
-- **Fills in what LinkedIn hides**: a page-context bridge observes the API
-  responses the LinkedIn page itself loads (the same Sales Navigator and
-  Voyager endpoints Frontier reads) and adds public profile links, exact
-  titles, companies and regions to what the DOM shows. Passive: it never
-  sends a request. Off switch in Settings; see `docs/RISK-REVIEW.md`.
-
-## Install (developer)
+## Install for development
 
 ```sh
 npm install
-npm run build          # -> dist/
+npm run build          # writes dist/
 ```
 
-Chrome → `chrome://extensions` → Developer mode → Load unpacked → `dist/`.
-Click the toolbar icon to open the side panel.
+In Chrome, open `chrome://extensions`, enable Developer mode, choose
+**Load unpacked**, and select `dist/`. Click the toolbar icon on a supported
+page to open the side panel.
 
-## Connect Deepline
+## Connect a webhook
 
-1. Open the side panel on any LinkedIn page and click **Connect Deepline**.
-   A Deepline tab asks you to approve this browser (the same device flow as
-   `deepline auth register`); the extension then holds a per-device key you
-   can revoke from Deepline's device list. Or click **Sign in to Deepline**
-   (or just sign in to the Deepline app in another tab) and the extension
-   follows your sign-in, the way Frontier's does.
-2. **Choose a play** in the panel. Your workspace's plays load from your own
-   sign-in. Nothing to paste.
-3. The pinned button now reads "Push … to <play>".
+Open Settings and choose **Connect a webhook**.
 
-Prefer a key? Settings → Use a Deepline play → Advanced → paste an API key.
-Disconnect (Settings → Use a Deepline play → Disconnect) forgets the device
-key in this browser; revoke it in Deepline to invalidate it everywhere.
-
-The extension reads the play's input schema and shapes the run input to it:
-`leads[]` gets one run per push, `lead{}` or field names such as
-`linkedin_url` / `first_name` / `company_name` get one run per person, and a
-`search_url` field makes the play eligible for "Import search". Two reference
-plays live in [`examples/deepline`](examples/deepline): one that stores and
-enriches a person, one that fetches a forwarded search through WizLeads.
-
-## Connect a webhook instead
-
-Settings → **Connect a webhook**:
-
-| Setting | What it does |
+| Setting | Purpose |
 |---|---|
-| Webhook URL | `https://` only (`http://localhost` allowed for dev). The host is requested as an optional permission on save. |
-| Shape | nested JSON envelope, flat (Clay / Zapier / sheets), or flat with Deepline field names. |
-| Batching | one request per person (recommended) or one request per push. |
-| Advanced: signing | `LWE` (`X-LWE-Signature: sha256=hex` over `timestamp.body`) or [Standard Webhooks](https://www.standardwebhooks.com) (`webhook-id/-timestamp/-signature`, `whsec_` secrets). |
-| Advanced: extra header | e.g. `Authorization: Bearer …`. |
+| Webhook URL | HTTPS endpoint; loopback HTTP is allowed for development. Host access is requested when saving. |
+| Shape | Nested JSON envelope or a flat record for spreadsheet-style receivers. |
+| Batching | One request per person or one request per push. |
+| Signing | `LWE` signatures or [Standard Webhooks](https://www.standardwebhooks.com). |
+| Extra header | Optional authentication, such as `Authorization: Bearer …`. |
 
-Every request carries `X-LWE-Event-Id`, `Idempotency-Key` (the person's
-canonical URL for unforced single sends) and, for the Deepline shape,
-`x-deepline-dedupe-key`. Retries re-send byte-identical bodies.
+Requests carry event and idempotency identifiers. Delivery retries preserve the
+original request body. See the [payload specification](docs/SPEC.md) for exact
+fields, headers, destination-specific mappings, and signature verification.
 
-## Try it locally in 60 seconds
+## Try it locally
 
 ```sh
-LWE_SECRET=topsecret LWE_ADMIN_TOKEN=admin npm run receiver   # 127.0.0.1:8787, writes leads.sqlite
-npm run build:test && npm run samples                          # sample LinkedIn-shaped pages on 127.0.0.1:8790
+LWE_SECRET=topsecret LWE_ADMIN_TOKEN=admin npm run receiver
+npm run build:test && npm run samples
 ```
 
-Load `dist-test/` as an unpacked extension, connect a webhook to
-`http://127.0.0.1:8787/hook` with secret `topsecret` (scheme LWE), open a
-sample page, click **Push**, then:
+The receiver listens at `127.0.0.1:8787`; sample pages are served at
+`127.0.0.1:8790`. Load `dist-test/` as an unpacked extension, connect a webhook
+to `http://127.0.0.1:8787/hook` with secret `topsecret` and the LWE signature
+scheme, then open a sample page and click **Push**.
 
 ```sh
 curl -H 'Authorization: Bearer admin' localhost:8787/leads
 ```
 
-The receiver binds to loopback, refuses to start without a secret unless
-`NODE_ENV=development LWE_ALLOW_UNSIGNED=1`, and only serves `/leads`,
-`/searches`, `/imports` when `LWE_ADMIN_TOKEN` is set. It is a reference, not
-a production service.
+The receiver writes to `leads.sqlite` and binds to loopback. It refuses to start
+without a signing secret unless `NODE_ENV=development LWE_ALLOW_UNSIGNED=1` is
+set. Its read endpoints require `LWE_ADMIN_TOKEN`. It is a development reference,
+not a production service.
 
-## Payload (webhook, nested shape, one person)
+## Sync first-degree connections
 
-```json
-{
-  "schema_version": "1",
-  "event": "lead.captured",
-  "event_id": "5f0c…",
-  "sent_at": "2026-09-05T15:04:05.000Z",
-  "source": { "extension": "linkedin-webhook-exporter", "version": "0.2.0", "page_type": "salesnav_search", "page_url": "https://www.linkedin.com/sales/search/people?query=…&page=2", "captured_by": "jai" },
-  "import": { "import_id": "9b1d…", "imported_by": "jai", "imported_at": "…", "import_kind": "basket", "search_url": "https://www.linkedin.com/sales/search/people?query=…", "search_name": "current title: CRO · region: United States", "list_id": null, "page": 2 },
-  "custom": { "campaign": "q3" },
-  "lead": {
-    "full_name": "Jane Doe", "first_name": "Jane", "last_name": "Doe",
-    "headline": null, "title": "VP of Sales", "company_name": "Acme Corp",
-    "company_linkedin_url": "https://www.linkedin.com/sales/company/12345",
-    "location": "Austin, Texas, United States",
-    "linkedin_url": null, "linkedin_slug": null,
-    "linkedin_member_urn": "ACwAAA…", "sales_navigator_url": "https://www.linkedin.com/sales/lead/ACwAAA…",
-    "connection_degree": "2nd", "profile_image_url": "https://…", "about": null,
-    "experience": [], "education": [], "captured_at": "…", "parse_warnings": []
-  }
-}
-```
+Choose a destination, open a signed-in tab on the supported platform, and select
+**My connections → Sync my connections**. Set the maximum number to read first
+(default 100). Your remaining daily export cap must cover that count.
 
-`import_kind` is `manual` (one click on a page), `basket` (a push of picked
-people, possibly from several pages, sharing one `import_id`) or `search` (a
-forwarded search, event `search.captured` with `search.search_url`,
-`search.filters`, `search.limit`, `search.saved_search_id`). See the spec
-for the flat and Deepline shapes and the play run inputs.
+The extension reads `JSESSIONID` in the tab and uses its CSRF value for
+same-origin requests to the platform's private current-user and connections
+endpoints. Connection records go through the existing delivery queue.
+Credentials remain in content-script memory and are not stored or sent to a
+destination.
 
-## Verify a request (Node)
+Only one sync runs at a time. **Stop sync** cancels collection; previously queued
+records still proceed to delivery. HTTP errors, challenge pages, account or
+session changes, and unexpected response formats stop collection without
+automatic retries. There is no scheduled refresh or automatic restart. Keep the
+source tab open. A new manual sync starts at the beginning and applies the
+configured deduplication rules.
 
-```js
-import { createHmac, timingSafeEqual } from "node:crypto";
-const ts = req.headers["x-lwe-timestamp"];
-const expected = "sha256=" + createHmac("sha256", SECRET).update(`${ts}.${rawBody}`).digest("hex");
-const ok = Math.abs(Date.now() / 1000 - ts) < 300 && timingSafeEqual(Buffer.from(expected), Buffer.from(req.headers["x-lwe-signature"]));
-```
+Connection records include the network owner and connection date. These describe
+relationships, not buying intent. See the [specification](docs/SPEC.md) for the
+complete record format.
+
+## Account restrictions and data handling
+
+Ordinary capture reads the current page and observes selected responses that
+page already loads. Explicit connection sync adds authenticated requests to a
+private API. Search import hands retrieval to the selected backend.
+
+Platform terms may prohibit these collection methods, and accounts can be
+restricted. Neither pacing nor an export cap guarantees approval or protection
+from restrictions. Use only accounts and data you are authorized to access.
+
+The private API is unsupported and may change. Connection sync has been tested
+against local fixtures; live compatibility has not been verified. Avoid live
+collection while an account is restricted. A platform-provided data archive is
+an alternative to authenticated crawling, but archive import is not implemented
+in this extension.
 
 ## Tests
 
 ```sh
-npm test                 # unit (vitest): parsers, mapping, play input shaping, basket, signing, queue, worker, receiver
-npm run test:acceptance  # Playwright: real extension in Chromium against fixture pages, a mock webhook and a mock Deepline API
-npm run e2e              # drives every sample page with the real extension and writes docs/E2E-REPORT.md
+npm test                 # unit tests
+npm run test:acceptance  # extension in Chromium against local fixtures and mock destinations
+npm run e2e              # sample-page checks; writes docs/E2E-REPORT.md
 ```
 
-## Safety and compliance
+`npm run samples` serves fixtures for supported layouts, including delayed rows,
+messy names, and grouped experience. Use the test build for local sample pages.
 
-Ordinary capture reads the page you are viewing. Connection sync reads your
-network through LinkedIn’s private API after an explicit click. Explicit connection sync makes paged LinkedIn requests; ordinary page capture does not. A whole-search
-import is a single request that hands the search to your backend. LinkedIn's
-terms prohibit scraping and automation by extensions regardless of pace;
-keep the daily cap low and make sure you have a lawful basis for processing
-the people you push. Nothing here is a safe harbor. You are responsible for
-how you use this tool.
+## Documentation
 
-Detection surface, for the record: no `cookies` permission, no `<all_urls>`,
-no `scripting`, and on-page UI in a shadow root. Connection sync explicitly
-uses your browser session and issues additional requests to LinkedIn.
-The page-context bridge patches `XMLHttpRequest` and `fetch` to observe the
-responses LinkedIn's own page loads (see `docs/RISK-REVIEW.md` for what that
-means for account risk) and the link "Share search" copies.
-
-## Sample pages, tests, audit
-
-- `npm run samples` serves static pages for every supported surface (classic
-  and 2026 layouts, messy names, delayed rows, grouped experience) at
-  LinkedIn-shaped paths for manual testing with the test build.
-- `docs/AUDIT.md` is an independent audit; `docs/AUDIT-STATUS.md` tracks the
-  fix for each finding.
-
-Docs: [`docs/SPEC.md`](docs/SPEC.md) · [`docs/ACCEPTANCE_TESTS.md`](docs/ACCEPTANCE_TESTS.md) · [`docs/RESEARCH.md`](docs/RESEARCH.md) · [`examples/deepline`](examples/deepline)
+- [Specification](docs/SPEC.md)
+- [Acceptance tests](docs/ACCEPTANCE_TESTS.md)
+- [Research](docs/RESEARCH.md)
+- [Risk review](docs/RISK-REVIEW.md)
+- [Audit](docs/AUDIT.md) and [finding status](docs/AUDIT-STATUS.md)
+- [Privacy](PRIVACY.md)
 
 ## License
 
-MIT. Built and maintained by [Deepline](https://deepline.com); contributions welcome.
-
-## Sync your first-degree connections
-
-Choose a destination, open a signed-in LinkedIn tab, and use **My connections →
-Sync my connections** in the side panel. Set the maximum number to read first
-(default 100). Your remaining daily export cap must cover that count. This limit
-is an export budget, not a guarantee against LinkedIn restrictions.
-
-The extension reads `JSESSIONID` in the tab, uses its CSRF value for same-origin
-requests to LinkedIn's private current-user and connections endpoints, then sends
-connection records through the existing delivery queue. Credentials remain in
-content-script memory; they are not stored or sent to your destination.
-
-Only one sync runs at a time. **Stop sync** cancels collection; already queued
-records will still be delivered. HTTP errors (including 401/403/429), challenge
-pages, session changes and unexpected response formats stop the sync without
-automatic retries. There is no scheduled refresh or automatic restart. A new
-manual sync starts at the beginning and skips already-exported connections.
-Keep the source tab open. An interrupted browser/worker does not resume collection.
-
-Records use the existing `lead.captured` / `leads.captured` events, with
-`source.page_type: "connections"`, `import.import_kind: "connections"`,
-`connection_degree: "1st"`, `connection_owner_urn`, and `connected_at`.
-The owner is the LinkedIn account whose network was read; `captured_by` remains
-the operator's configured label. These are relationship facts, not buying intent.
-
-This private API is unsupported and may change. The implementation is verified
-against local response fixtures, not a live LinkedIn account. Do not use it while
-your account is restricted. LinkedIn archive import remains the alternative that
-does not crawl your logged-in session.
+MIT. Contributions welcome.
