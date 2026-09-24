@@ -180,7 +180,8 @@ export function truncate(text: string | null, max = 2000): string | null {
 /** Identity key for dedupe: canonical public URL, else Sales Nav URL, else
  *  name+company. The name fallback is explicitly weak (collisions possible)
  *  and receivers should treat `name:` keys as low confidence. */
-export function dedupeKey(lead: { connection_owner_urn?: string; linkedin_url: string | null; sales_navigator_url: string | null; full_name: string; company_name: string | null }): string {
+export function dedupeKey(lead: { connection_owner_urn?: string; connection_owner_url?: string; linkedin_url: string | null; sales_navigator_url: string | null; full_name: string; company_name: string | null }): string {
+  if (lead.connection_owner_url && lead.linkedin_url) return `archive:${lead.connection_owner_url.toLowerCase()}:${lead.linkedin_url.toLowerCase()}`;
   if (lead.connection_owner_urn && lead.linkedin_url) return `connection:${lead.connection_owner_urn}:${lead.linkedin_url.toLowerCase()}`;
   if (lead.linkedin_url) return lead.linkedin_url.toLowerCase();
   if (lead.sales_navigator_url) return lead.sales_navigator_url.toLowerCase();

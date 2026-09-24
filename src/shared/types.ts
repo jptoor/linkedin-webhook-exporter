@@ -34,6 +34,9 @@ export type ParseWarning =
 export interface LeadRecord {
   /** Present only for an explicit first-degree connection sync. */
   connection_owner_urn?: string;
+  /** User-declared owner of an uploaded archive; not verified through a session. */
+  connection_owner_url?: string;
+  connection_source?: "archive";
   connected_at?: string;
   full_name: string;
   /** The name exactly as rendered, when cleaning changed it (badges, credentials, emoji). */

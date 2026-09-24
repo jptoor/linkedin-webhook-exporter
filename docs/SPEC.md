@@ -528,32 +528,26 @@ See `ACCEPTANCE_TESTS.md`. Every criterion maps to an automated test
 - v0.3 candidates: company pages, per-play field pickers, CSV fallback,
   Firefox build.
 
-## Explicit first-degree connection sync
+## Full connections archive import
 
-The side panel offers a user-started, bounded connection sync. Privileged runtime
-messages `CONNECTIONS_START { tabId, limit, destinationId }`, `CONNECTIONS_STATUS`,
-and `CONNECTIONS_STOP` are available only to extension pages. Page scripts and
-externally connected websites cannot start or stop a sync.
+Bulk connections require an official Connections.csv export. The panel previews
+it locally and requires owner URL, destination and explicit confirmation.
+Only trusted extension pages may send CONNECTIONS_IMPORT with csv, ownerUrl,
+confirmed and destinationId. CONNECTIONS_START is rejected; no crawler remains.
+CONNECTIONS_STATUS and CONNECTIONS_STOP expose scalar progress and cancellation.
 
-The content script reads the JavaScript-accessible JSESSIONID CSRF value in
-memory, calls the fixed same-origin current-user and connections endpoints, and
-re-checks the account before each page, and resolves normalized response entities by URN. Only edges referenced by the result
-list become records; malformed or unresolved edges fail the page. Requests never
-follow redirects and time out after 15 seconds. HTTP failures are not retried.
-No token is sent across the runtime message boundary or stored.
+The worker validates every row before admission: required headers, canonical
+profile URLs, names, unique profiles and valid dates. Limits are 10 MB and 30,000
+records. Email and unrelated columns are dropped. Owner identity and completeness
+are declared by the user. Invalid files fail without admitting a partial file.
 
-The worker pins the destination and network owner for a run, admits each page
-through the existing export queue/cap/signing path, and publishes scalar progress
-in session storage. One run is allowed across all tabs/panels. Changed destinations,
-changed sessions, repeated edges and unexpected pagination stop the run. An
-interrupted worker never resumes collection automatically. A later explicit sync
-starts at offset zero; dedupe is scoped to owner plus profile URL. Already queued
-records retain ordinary webhook delivery retries when collection stops.
+Admission runs in batches through normal signing, dedupe and daily caps. A cap
+can interrupt admission with an explicit processed count. Reimport the same file
+with dedupe enabled to continue. Stop/restart never retracts queued deliveries.
+Pending and failed queue records are retained; only sent history is capped.
 
-Existing event envelopes remain unchanged. New enum values are `connections` for
-`source.page_type` and `import.import_kind`. Connection-sync leads add optional
-`connection_owner_urn` and `connected_at` fields and use `connection_degree: "1st"`.
-Mapped plays can request the two new fields; flat/generic payloads preserve them.
-Read limits are 1–2,000 and must fit the remaining daily export cap at start.
-The cap is not a LinkedIn safety threshold. This feature uses an unsupported
-private API; local fixture tests do not establish live compatibility or approval.
+Envelopes keep source.page_type and import.import_kind set to connections.
+Leads add connection_owner_url, connection_source: archive, connected_at as an
+ISO date (no invented time), and connection_degree: 1st. The previous optional
+connection_owner_urn remains supported for compatibility but is not invented.
+Archive dedupe uses declared owner URL plus member URL.

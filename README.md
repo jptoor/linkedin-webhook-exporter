@@ -2,8 +2,7 @@
 
 Open-source Chrome extension (MIT) for collecting people from supported profile
 and search pages and sending them to a configured play or webhook. Select
-people across pages, forward a search to a backend, or explicitly sync your
-first-degree connections from the side panel.
+people across pages, forward a search to a backend, or import your full connections export from the side panel.
 
 Settings live in your browser profile. Usage reporting is enabled by default
 and can be disabled in Settings. See [PRIVACY.md](PRIVACY.md) for data handling,
@@ -16,8 +15,8 @@ authentication, and reporting details.
   them together. Selections clear when the browser closes.
 - **Search import:** forward a shareable search URL, filters, and requested limit
   to a backend that retrieves the results.
-- **Connection sync:** explicitly read first-degree connections and send them
-  through the delivery queue, with a read limit and a Stop button.
+- **Connections import:** download your full data archive, preview Connections.csv
+  locally, and confirm before sending records through the delivery queue.
 - **Play destinations:** choose a configured play. Its input schema
   determines whether it receives a batch, an individual person, or a search.
 - **Signed webhooks:** send nested or flat JSON with optional authentication
@@ -94,44 +93,34 @@ without a signing secret unless `NODE_ENV=development LWE_ALLOW_UNSIGNED=1` is
 set. Its read endpoints require `LWE_ADMIN_TOKEN`. It is a development reference,
 not a production service.
 
-## Sync first-degree connections
+## Import all connections
 
-Choose a destination, open a signed-in tab on the supported platform, and select
-**My connections → Sync my connections**. Set the maximum number to read first
-(default 100). Your remaining daily export cap must cover that count.
+1. Use the side panel’s **Request your full connections export** link.
+2. Select **Download larger data archive, including connections**, then request it.
+3. Wait for the download email, extract the archive, and select only `Connections.csv`.
+4. Enter your profile URL and review the local preview, destination, and daily cap.
+5. Confirm that this is your own full export, then click **Import connections**.
 
-The extension reads `JSESSIONID` in the tab and uses its CSRF value for
-same-origin requests to the platform's private current-user and connections
-endpoints. Connection records go through the existing delivery queue.
-Credentials remain in content-script memory and are not stored or sent to a
-destination.
+The extension does not crawl connections or read a session token for this flow.
+It excludes email and unrelated columns; never upload the complete ZIP. The file
+and declared owner cannot be independently verified. Connection records indicate
+relationships, not buying intent or relationship strength.
 
-Only one sync runs at a time. **Stop sync** cancels collection; previously queued
-records still proceed to delivery. HTTP errors, challenge pages, account or
-session changes, and unexpected response formats stop collection without
-automatic retries. There is no scheduled refresh or automatic restart. Keep the
-source tab open. A new manual sync starts at the beginning and applies the
-configured deduplication rules.
-
-Connection records include the network owner and connection date. These describe
-relationships, not buying intent. See the [specification](docs/SPEC.md) for the
-complete record format.
+Stopping an import leaves previously queued records in the delivery queue.
+If the daily cap interrupts an import, keep deduplication enabled and import the
+same file again after increasing the cap or waiting. “Processed” and “queued” do
+not mean delivered: check Recent activity for failures.
 
 ## Account restrictions and data handling
 
-Ordinary capture reads the current page and observes selected responses that
-page already loads. Explicit connection sync adds authenticated requests to a
-private API. Search import hands retrieval to the selected backend.
+Manual page capture and passive response observation remain available and can
+violate platform terms. Archive import removes the extra authenticated requests
+from bulk connection collection; it does not establish platform approval for the
+rest of the extension. Search import delegates collection to your chosen backend.
 
-Platform terms may prohibit these collection methods, and accounts can be
-restricted. Neither pacing nor an export cap guarantees approval or protection
-from restrictions. Use only accounts and data you are authorized to access.
-
-The private API is unsupported and may change. Connection sync has been tested
-against local fixtures; live compatibility has not been verified. Avoid live
-collection while an account is restricted. A platform-provided data archive is
-an alternative to authenticated crawling, but archive import is not implemented
-in this extension.
+Read the [current risk review](docs/EXTENSION-RISK-REVIEW.md) before deployment.
+It covers remaining page hooks, credentials, retention, telemetry, destination
+changes, and the limits of a user-provided archive.
 
 ## Tests
 

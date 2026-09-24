@@ -54,7 +54,8 @@ export function nextWake(items: QueueItem[]): number | null {
 
 export function prune(items: QueueItem[], now: number, keepSentMs = 24 * 3600_000, maxItems = 500): QueueItem[] {
   const kept = items.filter((i) => !(i.status === "sent" && now - i.createdAt > keepSentMs));
-  return kept.length > maxItems ? kept.slice(kept.length - maxItems) : kept;
+  const retainedSent = new Set(kept.filter(i => i.status === "sent").slice(-maxItems).map(i => i.id));
+  return kept.filter(i => i.status !== "sent" || retainedSent.has(i.id));
 }
 
 /** Remove finished items. `all` clears everything except requests that are

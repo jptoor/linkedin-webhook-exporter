@@ -1,44 +1,26 @@
 import { describe, expect, it } from "vitest";
-import { connectionOwner, parseConnectionPage } from "../../src/shared/connections";
+import { parseConnectionsCsv } from "../../src/shared/connections";
 import { dedupeKey } from "../../src/shared/normalize";
-
-const owner = "urn:li:fs_miniProfile:owner1234";
-function page() {
-  return { data: { elements: ["urn:li:connection:1"], paging: { start: 0, count: 40, total: 1 } }, included: [
-    { entityUrn: "urn:li:fsd_profile:unrelated", firstName: "Not", lastName: "Connected", publicIdentifier: "unrelated" },
-    { entityUrn: "urn:li:fsd_profile:person1234", firstName: "Jane", lastName: "Doe", publicIdentifier: "jane-doe", headline: "Engineer" },
-    { entityUrn: "urn:li:connection:1", connectedMember: "urn:li:fsd_profile:person1234", createdAt: 1700000000000 }
-  ] };
-}
-describe("connections response contract", () => {
-  it("resolves edges by URN rather than included order; does not invent relationships for unrelated profiles", () => {
-    const result = parseConnectionPage(page(), owner, 0, 40);
-    expect(result).toMatchObject({ done: true, nextStart: 1, leads: [{ full_name: "Jane Doe", connection_degree: "1st", connection_owner_urn: owner, connected_at: "2023-11-14T22:13:20.000Z", linkedin_url: "https://www.linkedin.com/in/jane-doe" }] });
-    expect(result.leads).toHaveLength(1);
+const owner = "https://www.linkedin.com/in/owner";
+const header = "First Name,Last Name,URL,Email Address,Company,Position,Connected On";
+const row = 'Jane,Doe,https://www.linkedin.com/in/jane,private@example.com,"Acme, Inc",VP,23 Sep 2020';
+describe("official connection archives", () => {
+  it("supports BOM, preamble, CRLF, commas and quotes without retaining extra columns", () => {
+    const leads = parseConnectionsCsv('\uFEFFNotes:\r\nYour "Connections" export\r\n\r\n' + header + '\r\n' + row, owner);
+    expect(leads).toHaveLength(1);
+    expect(leads[0]).toMatchObject({ full_name: "Jane Doe", company_name: "Acme, Inc", connected_at: "2020-09-23", connection_source: "archive", connection_owner_url: owner, connection_degree: "1st" });
+    expect(leads[0].connection_owner_urn).toBeUndefined();
+    expect(JSON.stringify(leads)).not.toContain("private@example.com");
   });
-  it("supports normalized starred relationships", () => {
-    const raw = page();
-    const conn = raw.included[2] as Record<string, unknown>;
-    conn["*connectedMember"] = conn.connectedMember;
-    delete conn.connectedMember;
-    expect(parseConnectionPage(raw, owner, 0, 40).leads).toHaveLength(1);
+  it("supports multiline and escaped quoted fields", () => {
+    expect(parseConnectionsCsv(header + '\n' + row.replace('"Acme, Inc"', '"Acme ""Labs""\nInc"'), owner)[0].company_name).toContain('Acme "Labs"');
   });
-  it("fails loudly on schema drift, unresolved relationships, and inconsistent paging", () => {
-    expect(() => parseConnectionPage({}, owner, 0, 40)).toThrow();
-    const missing = page(); missing.included.pop();
-    expect(() => parseConnectionPage(missing, owner, 0, 40)).toThrow();
-    expect(() => parseConnectionPage(page(), owner, 40, 40)).toThrow();
-    const empty = page(); empty.data.elements = [];
-    expect(() => parseConnectionPage(empty, owner, 0, 40)).toThrow();
+  it("rejects non-export files, malformed rows, duplicate identities, missing URLs and ambiguous dates", () => {
+    for (const text of ["not a CSV", header, header + '\nJane,Doe', header + '\n' + row + '\n' + row, header + '\n' + row.replace('https://www.linkedin.com/in/jane', ''), header + '\n' + row.replace('23 Sep 2020', '09/10/2020'), header + '\n' + row.replace('23 Sep 2020', '31 Feb 2020')]) expect(() => parseConnectionsCsv(text, owner)).toThrow();
   });
-  it("identifies the owner from the current-user response, never an arbitrary included profile", () => {
-    expect(connectionOwner({ miniProfile: { entityUrn: owner } })).toBe(owner);
-    expect(connectionOwner({ data: { "*miniProfile": owner }, included: [{ entityUrn: owner }] })).toBe(owner);
-    expect(() => connectionOwner({ included: [{ entityUrn: owner }] })).toThrow();
-  });
-  it("keeps relationship dedupe separate for each owner and ordinary profile captures", () => {
-    const lead = parseConnectionPage(page(), owner, 0, 40).leads[0];
-    expect(dedupeKey(lead)).not.toBe(dedupeKey({ ...lead, connection_owner_urn: "urn:li:member:other1234" }));
-    expect(dedupeKey(lead)).not.toBe(dedupeKey({ ...lead, connection_owner_urn: undefined }));
+  it("requires an owner and separates the same contact across owners", () => {
+    expect(() => parseConnectionsCsv(header + '\n' + row, "https://evil.example/in/me")).toThrow();
+    const lead = parseConnectionsCsv(header + '\n' + row, owner)[0];
+    expect(dedupeKey(lead)).not.toBe(dedupeKey({ ...lead, connection_owner_url: "https://www.linkedin.com/in/other" }));
   });
 });

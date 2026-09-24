@@ -1,3 +1,4 @@
+import { parseConnectionsCsv } from "../shared/connections";
 import { connectionStatus, startConnections, stopConnections } from "./connections";
 declare const __EXTENSION_VERSION__: string;
 declare const __TEST_BUILD__: boolean;
@@ -24,6 +25,9 @@ const ALARM = "lwe-flush";
 const CLAIM_ALARM = "lwe-claim";
 const KEYS = { queue: "queue", dedupe: "dedupe", daily: "daily", anonymousId: "anonymousId", connection: "connection" } as const;
 const SESSION_KEYS = { basket: "basket", shareLinks: "shareLinks", auth: "auth", claim: "claim" } as const;
+
+// Credential-bearing local storage must not be readable by content scripts.
+const storageReady = chrome.storage.local.setAccessLevel ? chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" }) : Promise.resolve();
 
 /* ------------------------------------------------------------ storage */
 
@@ -395,7 +399,7 @@ async function handleCapture(msg: CaptureMsg, connections = false): Promise<Capt
     let leads = validateLeads(msg.leads);
     if (connections) {
       if (leads.length !== msg.leads.length) return reject("invalid_message");
-      leads = leads.map((lead, i) => ({ ...lead, connection_owner_urn: msg.leads[i].connection_owner_urn, connected_at: msg.leads[i].connected_at }));
+      leads = leads.map((lead, i) => ({ ...lead, connection_owner_url: msg.leads[i].connection_owner_url, connection_source: msg.leads[i].connection_source, connected_at: msg.leads[i].connected_at }));
     }
     await logEvent("capture.requested", `${requested} lead(s) captured on ${msg.pageType} for ${describeDestination(dest)}`, { pageType: msg.pageType, pageUrl: msg.pageUrl, requested, valid: leads.length, force: !!msg.force, importKind: msg.importKind ?? "manual", destination: dest.id });
     const skipped: string[] = [];
@@ -442,6 +446,7 @@ async function handleCapture(msg: CaptureMsg, connections = false): Promise<Capt
 
     const queue = recoverStaleLeases(await loadQueue(), now);
     const enq = enqueueLeads(dest, settings, leads, source, imp, !!msg.force, now, queue, dedupe, identity);
+    if (new TextEncoder().encode(JSON.stringify(queue)).byteLength > 6 * 1024 * 1024) return reject("invalid_message", {}, "Delivery queue is full. Wait for delivery, clear completed history, then import again. No records in this batch were queued.");
     await saveDedupe(dedupe);
     await saveDaily({ ...daily, queued: daily.queued + leads.length });
     await saveQueue(prune(queue, now));
@@ -826,6 +831,7 @@ function isContentPage(sender: chrome.runtime.MessageSender): boolean {
 chrome.runtime.onMessage.addListener((msg: ContentToBackground, sender, sendResponse) => {
   (async () => {
     if (sender.id !== chrome.runtime.id || !msg || typeof msg !== "object" || typeof msg.type !== "string") return { error: "invalid_sender" };
+    await storageReady;
     const fromExt = isExtensionPage(sender);
     const fromPage = !fromExt && isContentPage(sender);
     if (!fromPage && !fromExt) return { error: "invalid_sender" };
@@ -836,32 +842,33 @@ chrome.runtime.onMessage.addListener((msg: ContentToBackground, sender, sendResp
         return fromExt ? connectionStatus() : { error: "forbidden" };
       case "CONNECTIONS_STOP":
         return fromExt ? stopConnections() : { error: "forbidden" };
-      case "CONNECTIONS_START": {
+      case "CONNECTIONS_START":
+        return fromExt ? { error: "Live sync has been removed. Download your full connections export and import Connections.csv." } : { error: "forbidden" };
+      case "CONNECTIONS_IMPORT": {
         if (!fromExt) return { error: "forbidden" };
-        if (!Number.isSafeInteger(msg.tabId) || !Number.isSafeInteger(msg.limit) || msg.limit < 1 || msg.limit > 2000 || typeof msg.destinationId !== "string") return { error: "Choose a limit between 1 and 2,000." };
+        if (msg.confirmed !== true || typeof msg.csv !== "string" || typeof msg.ownerUrl !== "string" || typeof msg.destinationId !== "string") return { error: "Preview your Connections.csv and confirm ownership before importing." };
+        const leads = parseConnectionsCsv(msg.csv, msg.ownerUrl);
         let destinationSnapshot = "";
         return startConnections({
-          tabId: msg.tabId, limit: msg.limit,
+          leads,
+          remaining: async () => (await getSettings()).dailyCap - (await loadDaily()).queued,
           prepare: async () => {
-            const tab = await chrome.tabs.get(msg.tabId);
-            if (!isAllowedPageUrl(tab.url, TEST_BUILD)) throw new Error("Open a LinkedIn tab first.");
             const settings = await getSettings();
             const dest = resolveDestination(settings, msg.destinationId);
             const problem = await destinationProblem(dest);
             if (problem || !dest) throw new Error(`Destination unavailable: ${problem ?? "no_destination"}`);
             if (dest.kind === "deepline_play" && (!dest.input.acceptsLeads || unfillableRequired(dest.input, "leads").length)) throw new Error("Choose a play that accepts people.");
-            const remaining = settings.dailyCap - (await loadDaily()).queued;
-            if (msg.limit > remaining) throw new Error(`Only ${Math.max(0, remaining)} exports remain today. Lower the sync limit or change the export cap in Settings.`);
             destinationSnapshot = JSON.stringify(dest);
             return describeDestination(dest);
           },
-          enqueue: async (leads, runId) => {
-            if (JSON.stringify(resolveDestination(await getSettings(), msg.destinationId)) !== destinationSnapshot) throw new Error("The destination changed. Sync stopped.");
-            return handleCapture({ type: "CAPTURE", leads, pageType: "connections", pageUrl: "https://www.linkedin.com/mynetwork/invite-connect/connections/", destinationId: msg.destinationId, importId: runId }, true);
+          enqueue: async (records, runId) => {
+            if (JSON.stringify(resolveDestination(await getSettings(), msg.destinationId)) !== destinationSnapshot) throw new Error("The destination changed. Import stopped.");
+            return handleCapture({ type: "CAPTURE", leads: records, pageType: "connections", pageUrl: "https://www.linkedin.com/mynetwork/invite-connect/connections/", destinationId: msg.destinationId, importId: runId }, true);
           }
         });
       }
       case "CAPTURE": {
+        if (msg.pageType === "connections") return { error: "Use the archive import flow." };
         if (fromPage && (typeof msg.pageUrl !== "string" || !sameOrigin(msg.pageUrl, tabUrl))) return { ok: false, queued: 0, skippedDuplicates: [], rejectedReason: "invalid_message", remainingToday: 0 } satisfies CaptureResponse;
         // Pages send to the active destination only; choosing another is a panel privilege.
         return handleCapture(fromPage ? { ...msg, destinationId: undefined } : msg);

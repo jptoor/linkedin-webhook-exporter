@@ -1,3 +1,5 @@
+> Historical review. See [the current review](EXTENSION-RISK-REVIEW.md) for the mandatory archive flow and remaining risks.
+
 > Update: explicit connection sync adds authenticated private-API reads. It uses
 > JSESSIONID as a local CSRF value, fetches first-degree connection pages on demand,
 > and uploads records through the existing queue. It can trigger restrictions.
