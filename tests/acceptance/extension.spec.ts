@@ -746,10 +746,11 @@ async function connectionFixture(total: number, failPage = -1, failureStatus = 4
   await context.addCookies([{ name: "JSESSIONID", value: '"fixture-csrf"', url: site.origin }]);
   const page = await context.newPage();
   const calls: number[] = [];
+  const account = { urn: "urn:li:fs_miniProfile:owner1234" };
   await page.route("**/voyager/api/**", async route => {
     const url = new URL(route.request().url());
     expect(route.request().headers()["csrf-token"]).toBe("fixture-csrf");
-    if (url.pathname.endsWith("/me")) return route.fulfill({ json: { miniProfile: { entityUrn: "urn:li:fs_miniProfile:owner1234" } } });
+    if (url.pathname.endsWith("/me")) return route.fulfill({ json: { miniProfile: { entityUrn: account.urn } } });
     const start = Number(url.searchParams.get("start"));
     const count = Number(url.searchParams.get("count"));
     calls.push(start);
@@ -765,7 +766,7 @@ async function connectionFixture(total: number, failPage = -1, failureStatus = 4
   const panel = await openPanelFor(context, extensionId, page);
   await expect(panel.locator("#destName")).toHaveText("Hook");
   await panel.setViewportSize({ width: 380, height: 800 });
-  return { page, panel, calls };
+  return { page, panel, calls, account };
 }
 
 test("connections sync: explicit start, paged collection, signed delivery, metadata and dedupe", async () => {
@@ -836,4 +837,14 @@ test("connections sync: export cap is checked before collecting any data", async
   await expect(panel.locator("#connectionsStatus")).toContainText("Only 100 exports remain");
   expect(calls).toEqual([]);
   expect(hook.leads).toHaveLength(0);
+});
+
+test("connections sync: owner change with the same CSRF value stops before another page", async () => {
+  const { panel, calls, account } = await connectionFixture(100);
+  await panel.locator("#connectionsStart").click();
+  await hook.waitFor(40);
+  account.urn = "urn:li:fs_miniProfile:other5678";
+  await expect(panel.locator("#connectionsStatus")).toContainText("account changed");
+  expect(calls).toEqual([0]);
+  expect(hook.leads).toHaveLength(40);
 });

@@ -88,8 +88,7 @@ export async function startConnections(opts: Options): Promise<ConnectionSyncSta
       state!.message = current.stopped ? "Sync stopped. Previously queued records will still be delivered." : error instanceof Error ? error.message : "LinkedIn sync failed.";
     } finally {
       await chrome.tabs.sendMessage(current.tabId, { type: "CONNECTIONS_ABORT", runId: current.id }).catch(() => undefined);
-      await publish();
-      run = null;
+      try { await publish(); } finally { run = null; }
     }
   })();
   return { ...state };

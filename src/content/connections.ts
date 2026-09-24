@@ -38,12 +38,16 @@ chrome.runtime.onMessage.addListener((m: ConnectionRequest, sender, reply) => {
       const run = { id: m.runId, token, owner: "", abort: new AbortController() };
       active = run;
       requestRun = run;
-      run.owner = connectionOwner(await read("/voyager/api/me", token, run.abort));
-      if (active !== run) throw new Error("Sync stopped.");
+
     }
     const run = active;
     requestRun = run;
     if (run.id !== m.runId || run.token !== token) throw new Error("The LinkedIn session changed. Sync stopped.");
+    // Re-check the account before each page, even if its CSRF value is unchanged.
+    const owner = connectionOwner(await read("/voyager/api/me", token, run.abort));
+    if (active !== run) throw new Error("Sync stopped.");
+    if (run.owner && run.owner !== owner) throw new Error("The LinkedIn account changed. Sync stopped.");
+    run.owner = owner;
     const query = new URLSearchParams({ decorationId: "com.linkedin.voyager.dash.deco.web.mynetwork.ConnectionListWithProfile-16", count: String(m.count), q: "search", sortType: "RECENTLY_ADDED", start: String(m.start) });
     const raw = await read(`/voyager/api/relationships/dash/connections?${query}`, token, run.abort);
     if (active !== run || csrf() !== token) throw new Error("The LinkedIn session changed. Sync stopped.");

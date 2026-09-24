@@ -537,7 +537,7 @@ externally connected websites cannot start or stop a sync.
 
 The content script reads the JavaScript-accessible JSESSIONID CSRF value in
 memory, calls the fixed same-origin current-user and connections endpoints, and
-resolves normalized response entities by URN. Only edges referenced by the result
+re-checks the account before each page, and resolves normalized response entities by URN. Only edges referenced by the result
 list become records; malformed or unresolved edges fail the page. Requests never
 follow redirects and time out after 15 seconds. HTTP failures are not retried.
 No token is sent across the runtime message boundary or stored.
