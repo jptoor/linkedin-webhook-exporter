@@ -27,7 +27,8 @@ const manifest = {
   // tabs: read the active tab's URL so the panel follows it (LinkedIn only,
   // via host_permissions) and relay actions to that tab's content script.
   // No `cookies`: sign-in state is learned from Deepline's session endpoint
-  // with credentials: "include"; the cookie itself is never touched.
+  // with credentials: "include". Explicit LinkedIn connection sync reads
+  // JSESSIONID through document.cookie in its isolated content script.
   permissions: ["storage", "alarms", "sidePanel", "tabs"],
   // LinkedIn (content scripts) and Deepline (sign-in, plays) at install.
   // Any other play/webhook host is requested as an optional permission.

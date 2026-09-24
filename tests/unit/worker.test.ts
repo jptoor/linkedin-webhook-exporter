@@ -55,7 +55,7 @@ describe("trust boundary", () => {
     expect(JSON.stringify(s)).not.toMatch(/dl_secret|hooks\.example/);
     expect(s).toMatchObject({ hasDestination: true, destinationName: "Hook", destinationKind: "webhook" });
     expect((await send({ type: "GET_SETTINGS" }, OPTIONS)).destinations[1].apiKey).toBe("dl_secret");
-    for (const type of ["RETRY_NOW", "CLEAR_QUEUE", "TEST_DESTINATION", "GET_STATE", "GET_LOG", "LIST_PLAYS", "SET_ACTIVE_DESTINATION", "TOGGLE_FAVORITE", "GET_PAGE_CONTEXT"]) expect(await send({ type }, PAGE)).toEqual({ error: "forbidden" });
+    for (const type of ["RETRY_NOW", "CLEAR_QUEUE", "TEST_DESTINATION", "GET_STATE", "GET_LOG", "LIST_PLAYS", "SET_ACTIVE_DESTINATION", "TOGGLE_FAVORITE", "GET_PAGE_CONTEXT", "CONNECTIONS_START", "CONNECTIONS_STOP", "CONNECTIONS_STATUS"]) expect(await send({ type }, PAGE)).toEqual({ error: "forbidden" });
   });
   it("the side panel sees destinations with secrets blanked; the options page sees them in full", async () => {
     const st = await send({ type: "GET_STATE" }, PANEL);
@@ -594,5 +594,15 @@ describe("Connect Deepline (device key, like `deepline auth register`)", () => {
   it("content scripts cannot connect or disconnect", async () => {
     expect(await send({ type: "CONNECT" }, PAGE)).toEqual({ error: "forbidden" });
     expect(await send({ type: "DISCONNECT" }, PAGE)).toEqual({ error: "forbidden" });
+  });
+});
+
+describe("connection sync recovery", () => {
+  it("reports an interrupted run without resuming LinkedIn reads", async () => {
+    await boot({}, () => {
+      fake.sessionStore.connectionSync = { status: "running", scanned: 40, queued: 40, skipped: 0, destination: "Hook", message: "Reading" };
+    });
+    expect(await send({ type: "CONNECTIONS_STATUS" }, PANEL)).toMatchObject({ status: "stopped", scanned: 40, queued: 40 });
+    expect(fake.tabMessages).toEqual([]);
   });
 });

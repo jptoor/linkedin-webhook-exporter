@@ -17,7 +17,7 @@ and error reports go to Deepline unless you turn them off (see PRIVACY.md).
 > prohibits browser extensions that scrape or automate its service, and
 > LinkedIn [restricts accounts](https://www.linkedin.com/help/linkedin/answer/a1341387)
 > that use them. This tool reads only what your browser already renders and
-> acts only when you click, and it never pages through results on its own,
+> acts only when you click. Explicit connection sync pages through your network,
 > but **no daily cap or dedupe setting makes that compliant or prevents a
 > restriction.** Use it where you have the right to, at your own risk, with
 > your own LinkedIn account. See [PRIVACY.md](PRIVACY.md).
@@ -166,8 +166,8 @@ npm run e2e              # drives every sample page with the real extension and 
 
 ## Safety and compliance
 
-The extension only reads what LinkedIn renders to you and only acts on a
-click. It never scrolls, paginates or navigates on its own: a whole-search
+Ordinary capture reads the page you are viewing. Connection sync reads your
+network through LinkedIn’s private API after an explicit click. Explicit connection sync makes paged LinkedIn requests; ordinary page capture does not. A whole-search
 import is a single request that hands the search to your backend. LinkedIn's
 terms prohibit scraping and automation by extensions regardless of pace;
 keep the daily cap low and make sure you have a lawful basis for processing
@@ -175,9 +175,8 @@ the people you push. Nothing here is a safe harbor. You are responsible for
 how you use this tool.
 
 Detection surface, for the record: no `cookies` permission, no `<all_urls>`,
-no `scripting`, no unsolicited fetches to LinkedIn, on-page UI in a shadow
-root, and every push is a real user click (synthetic clicks from page scripts
-are ignored).
+no `scripting`, and on-page UI in a shadow root. Connection sync explicitly
+uses your browser session and issues additional requests to LinkedIn.
 The page-context bridge patches `XMLHttpRequest` and `fetch` to observe the
 responses LinkedIn's own page loads (see `docs/RISK-REVIEW.md` for what that
 means for account risk) and the link "Share search" copies.
@@ -195,3 +194,33 @@ Docs: [`docs/SPEC.md`](docs/SPEC.md) · [`docs/ACCEPTANCE_TESTS.md`](docs/ACCEPT
 ## License
 
 MIT. Built and maintained by [Deepline](https://deepline.com); contributions welcome.
+
+## Sync your first-degree connections
+
+Choose a destination, open a signed-in LinkedIn tab, and use **My connections →
+Sync my connections** in the side panel. Set the maximum number to read first
+(default 100). Your remaining daily export cap must cover that count. This limit
+is an export budget, not a guarantee against LinkedIn restrictions.
+
+The extension reads `JSESSIONID` in the tab, uses its CSRF value for same-origin
+requests to LinkedIn's private current-user and connections endpoints, then sends
+connection records through the existing delivery queue. Credentials remain in
+content-script memory; they are not stored or sent to your destination.
+
+Only one sync runs at a time. **Stop sync** cancels collection; already queued
+records will still be delivered. HTTP errors (including 401/403/429), challenge
+pages, session changes and unexpected response formats stop the sync without
+automatic retries. There is no scheduled refresh or automatic restart. A new
+manual sync starts at the beginning and skips already-exported connections.
+Keep the source tab open. An interrupted browser/worker does not resume collection.
+
+Records use the existing `lead.captured` / `leads.captured` events, with
+`source.page_type: "connections"`, `import.import_kind: "connections"`,
+`connection_degree: "1st"`, `connection_owner_urn`, and `connected_at`.
+The owner is the LinkedIn account whose network was read; `captured_by` remains
+the operator's configured label. These are relationship facts, not buying intent.
+
+This private API is unsupported and may change. The implementation is verified
+against local response fixtures, not a live LinkedIn account. Do not use it while
+your account is restricted. LinkedIn archive import remains the alternative that
+does not crawl your logged-in session.

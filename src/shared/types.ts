@@ -13,8 +13,8 @@ export interface EducationEntry {
   date_range: string | null;
 }
 
-export type PageType = "profile" | "people_search" | "salesnav_search" | "salesnav_list" | "salesnav_lead";
-export const PAGE_TYPES: readonly PageType[] = ["profile", "people_search", "salesnav_search", "salesnav_list", "salesnav_lead"];
+export type PageType = "connections" | "profile" | "people_search" | "salesnav_search" | "salesnav_list" | "salesnav_lead";
+export const PAGE_TYPES: readonly PageType[] = ["connections", "profile", "people_search", "salesnav_search", "salesnav_list", "salesnav_lead"];
 
 /** Parser confidence signals. Receivers can route low-confidence records to review. */
 export type ParseWarning =
@@ -32,6 +32,9 @@ export type ParseWarning =
   | "api_merged";
 
 export interface LeadRecord {
+  /** Present only for an explicit first-degree connection sync. */
+  connection_owner_urn?: string;
+  connected_at?: string;
   full_name: string;
   /** The name exactly as rendered, when cleaning changed it (badges, credentials, emoji). */
   full_name_raw: string | null;
@@ -75,7 +78,7 @@ export interface ImportInfo {
   imported_at: string;
   /** "manual" for a click on a page, "basket" for a multi-page basket send,
    *  "search" for a search handed to a backend provider. */
-  import_kind: "manual" | "basket" | "search";
+  import_kind: "manual" | "basket" | "search" | "connections";
   search_url: string | null;
   /** Human label: Sales Nav keywords + filters, list id, or the page title. */
   search_name: string | null;
