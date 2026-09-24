@@ -1,7 +1,7 @@
 # People Exporter
 
 Open-source Chrome extension (MIT) for collecting people from supported profile
-and search pages and sending them to a configured workflow or webhook. Select
+and search pages and sending them to a configured play or webhook. Select
 people across pages, forward a search to a backend, or explicitly sync your
 first-degree connections from the side panel.
 
@@ -18,7 +18,7 @@ authentication, and reporting details.
   to a backend that retrieves the results.
 - **Connection sync:** explicitly read first-degree connections and send them
   through the delivery queue, with a read limit and a Stop button.
-- **Workflow destinations:** choose a configured workflow. Its input schema
+- **Play destinations:** choose a configured play. Its input schema
   determines whether it receives a batch, an individual person, or a search.
 - **Signed webhooks:** send nested or flat JSON with optional authentication
   headers and request signatures.
@@ -38,6 +38,24 @@ npm run build          # writes dist/
 In Chrome, open `chrome://extensions`, enable Developer mode, choose
 **Load unpacked**, and select `dist/`. Click the toolbar icon on a supported
 page to open the side panel.
+
+## Connect a play
+
+1. Connect your workspace from the side panel, or use an API key in Settings.
+2. Select **Choose a play** and pick the play that should receive your records.
+3. Use the **Sending to** selector to switch destinations or pin favourites.
+
+The extension reads each play's input schema and shapes the input accordingly:
+
+- `leads[]`: one run per batch of people.
+- `lead{}` or individual fields such as `first_name` and `company_name`: one
+  run per person.
+- `search_url`: enables forwarding a search for the play to retrieve.
+
+The [play examples and setup READMEs](examples/) are included in the repository.
+They cover storing and enriching captured people, and fetching the results of a
+forwarded search. Follow the accompanying README to configure and run each play.
+See the [specification](docs/SPEC.md) for input mapping details.
 
 ## Connect a webhook
 
