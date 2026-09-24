@@ -1024,6 +1024,12 @@ function sameOrigin(a: unknown, b: string | undefined): boolean {
   }
 }
 
+// Content scripts cannot observe credential-bearing local storage directly.
+// Send only an invalidation; they fetch the sanitized settings projection.
+chrome.storage.onChanged?.addListener((changes, area) => {
+  if (area === "local" && "settings" in changes) void notifyTabs({ type: "SETTINGS_CHANGED" });
+});
+
 chrome.tabs?.onRemoved?.addListener((tabId) => {
   contexts.delete(tabId);
 });

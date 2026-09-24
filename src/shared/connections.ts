@@ -68,7 +68,7 @@ export function parseConnectionsCsv(text: string, ownerUrl: string): LeadRecord[
   if (data.length > ARCHIVE_MAX_ROWS) throw new Error("The file exceeds 30,000 connections.");
   const seen = new Set<string>();
   return data.map((row, index) => {
-    const number = headerIndex + index + 2;
+    const number = headerLine + headerIndex + index + 2;
     if (row.length !== header.length) throw new Error(`Row ${number}: column count does not match the export header.`);
     const get = (name: string) => row[header.indexOf(name)].trim();
     const url = canonicalizeLinkedInUrl(get("URL"));
