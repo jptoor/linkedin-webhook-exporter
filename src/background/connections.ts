@@ -1,16 +1,14 @@
-import { IDLE_CONNECTION_SYNC, type ConnectionSyncState } from "../shared/connections";
+import { CONNECTIONS_PAGE_SIZE, IDLE_CONNECTION_SYNC, type ConnectionPage, type ConnectionSyncState } from "../shared/connections";
 import type { CaptureResponse } from "../shared/messages";
 import type { LeadRecord } from "../shared/types";
 
-interface Options {
-  leads: LeadRecord[];
-  remaining: () => Promise<number>;
+type Options = ({ leads: LeadRecord[]; remaining: () => Promise<number> } | { tabId: number; limit: number }) & {
   prepare: () => Promise<string>;
   enqueue: (leads: LeadRecord[], runId: string) => Promise<CaptureResponse>;
 }
 const KEY = "connectionSync";
 let state: ConnectionSyncState | null = null;
-let run: { id: string; stopped: boolean } | null = null;
+let run: { id: string; stopped: boolean; tabId?: number } | null = null;
 const storage = () => chrome.storage.session;
 async function publish(): Promise<void> {
   await storage().set({ [KEY]: state });
@@ -26,14 +24,16 @@ export async function connectionStatus(): Promise<ConnectionSyncState> {
 export async function stopConnections(): Promise<ConnectionSyncState> {
   if (run) {
     run.stopped = true;
+    if (run.tabId !== undefined) await chrome.tabs.sendMessage(run.tabId, { type: "CONNECTIONS_ABORT", runId: run.id }).catch(() => undefined);
   }
   return connectionStatus();
 }
 export async function startConnections(opts: Options): Promise<ConnectionSyncState> {
   if (run) throw new Error("A connections import is already running.");
-  const current = { id: crypto.randomUUID(), stopped: false };
+  const current = { id: crypto.randomUUID(), stopped: false, tabId: "tabId" in opts ? opts.tabId : undefined };
+  const total = "leads" in opts ? opts.leads.length : opts.limit;
   run = current; // Claim before the first await, across every panel/tab.
-  state = { ...IDLE_CONNECTION_SYNC, status: "running", total: opts.leads.length, message: "Checking destination…" };
+  state = { ...IDLE_CONNECTION_SYNC, status: "running", total, message: "Checking destination…" };
   try {
     state.destination = await opts.prepare();
     await publish();
@@ -46,14 +46,33 @@ export async function startConnections(opts: Options): Promise<ConnectionSyncSta
   }
   void (async () => {
     let start = 0;
+    const seen = new Set<string>();
+    let owner: string | undefined;
     try {
-      while (!current.stopped && start < opts.leads.length) {
-        const count = Math.min(100, Math.max(1, await opts.remaining()), opts.leads.length - start);
-        if (current.stopped) break;
-        const page = { leads: opts.leads.slice(start, start + count), nextStart: start + count, done: start + count === opts.leads.length };
+      while (!current.stopped && start < total) {
+        let page: ConnectionPage;
+        if ("leads" in opts) {
+          const count = Math.min(100, Math.max(1, await opts.remaining()), total - start);
+          if (current.stopped) break;
+          page = { leads: opts.leads.slice(start, start + count), nextStart: start + count, done: start + count === total };
+        } else {
+          const count = Math.min(CONNECTIONS_PAGE_SIZE, total - start);
+          const response = await chrome.tabs.sendMessage(opts.tabId, { type: "CONNECTIONS_READ", runId: current.id, start, count }) as { page?: ConnectionPage; error?: string } | undefined;
+          if (current.stopped) break;
+          if (response?.error) throw new Error(response.error);
+          if (!response?.page || !Array.isArray(response.page.leads) || response.page.leads.length > count || response.page.nextStart !== start + response.page.leads.length || typeof response.page.done !== "boolean" || (!response.page.done && !response.page.leads.length)) throw new Error("LinkedIn returned an invalid page. Sync stopped.");
+          page = response.page;
+          for (const lead of page.leads) {
+            if (!lead.linkedin_url || !lead.connection_owner_urn || !lead.connected_at || lead.connection_degree !== "1st") throw new Error("LinkedIn returned an incomplete connection. Sync stopped.");
+            owner ??= lead.connection_owner_urn;
+            if (owner !== lead.connection_owner_urn) throw new Error("The LinkedIn account changed. Sync stopped.");
+            if (seen.has(lead.linkedin_url)) throw new Error("LinkedIn repeated a connection. Sync stopped.");
+            seen.add(lead.linkedin_url);
+          }
+        }
         if (page.leads.length) {
           const result = await opts.enqueue(page.leads, current.id);
-          if (!result.ok) throw new Error(result.detail ?? `Import paused: ${result.rejectedReason}. ${start} of ${opts.leads.length} file records processed. Adjust the export cap or wait, then import the same file again; keep deduplication enabled. Previously queued records remain in Recent activity.`);
+          if (!result.ok) throw new Error(result.detail ?? `Import paused: ${result.rejectedReason}. ${start} of ${total} file records processed. Adjust the export cap or wait, then import the same file again; keep deduplication enabled. Previously queued records remain in Recent activity.`);
           state!.queued += result.queued;
           state!.skipped += result.skippedDuplicates.length;
         }
@@ -61,18 +80,19 @@ export async function startConnections(opts: Options): Promise<ConnectionSyncSta
         state!.scanned = start;
         state!.message = "Importing connections…";
         await publish();
-        if (page.done) {
+        if (page.done || start >= total) {
           state!.status = "completed";
-          state!.message = "All file records processed. Queued is not delivered; check Recent activity for delivery status.";
+          state!.message = "leads" in opts ? "All file records processed. Queued is not delivered; check Recent activity for delivery status." : page.done ? "End of network reached. Check Recent activity for delivery status." : "Requested limit reached; more connections may remain.";
           break;
         }
-        await new Promise(resolve => setTimeout(resolve, 0));
+        await new Promise(resolve => setTimeout(resolve, "leads" in opts ? 0 : 2000));
       }
       if (current.stopped) { state!.status = "stopped"; state!.message = "Import stopped. Previously queued records will still be delivered."; }
     } catch (error) {
       state!.status = current.stopped ? "stopped" : "failed";
       state!.message = current.stopped ? "Import stopped. Previously queued records will still be delivered." : error instanceof Error ? error.message : "Connection import failed.";
     } finally {
+      if (current.tabId !== undefined) await chrome.tabs.sendMessage(current.tabId, { type: "CONNECTIONS_ABORT", runId: current.id }).catch(() => undefined);
       try { await publish(); } finally { run = null; }
     }
   })();

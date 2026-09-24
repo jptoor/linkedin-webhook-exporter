@@ -33,6 +33,14 @@ completeness are user attestations, not independently verified facts. Local
 storage is restricted to trusted extension contexts; the browser profile still
 contains destination credentials and queued personal data.
 
+**Optional live connections sync** reads the JavaScript-accessible JSESSIONID
+CSRF value in the content script's memory and calls the private current-user and
+connections endpoints. It starts only after explicit confirmation in the side
+panel. It sends connection records and the owner's identifier to the selected
+destination; the session value is not stored or sent there. Errors and account
+changes stop collection, with no scheduled refresh or automatic collection retry.
+This option carries account-restriction risk; archive import is recommended.
+
 ## Deepline sign-in
 
 When you sign in to Deepline in a normal tab, the extension is signed in too.

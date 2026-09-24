@@ -166,7 +166,8 @@
 
 <main>
   <section aria-labelledby="connectionsTitle">
-    <h2 id="connectionsTitle">Import all connections</h2>
+    <h2 id="connectionsTitle">Connections</h2>
+    <p class="small">Recommended: import your full connections archive.</p>
     <div class="card">
       <ol class="small">
         <li><a href="https://www.linkedin.com/mypreferences/d/download-my-data" target="_blank" rel="noopener noreferrer">Request your full connections export</a> in Settings &amp; Privacy → Data privacy → Download your data. Select “Download larger data archive, including connections,” then Request archive.</li>
@@ -181,9 +182,17 @@
       <ul class="small" id="connectionsSamples"></ul>
       <label class="small"><input id="connectionsConfirm" type="checkbox"> This is my full connections export, and I approve sending the previewed records to the destination shown below.</label>
       <p id="connectionsDestination" class="small"></p>
-      <div class="btn-row"><button id="connectionsStart" class="btn" type="button" disabled>Import connections</button><button id="connectionsStop" class="btn" type="button" hidden>Stop import</button></div>
+      <div class="btn-row"><button id="connectionsStart" class="btn" type="button" disabled>Import connections</button><button id="connectionsStop" class="btn" type="button" hidden>Stop</button></div>
       <p id="connectionsStatus" class="muted small" role="status" aria-live="polite">Nothing is sent until you confirm and click Import.</p>
     </div>
+    <details id="connectionsLiveOptions" class="card">
+      <summary>Optional: sync connections from your signed-in account</summary>
+      <p class="small">This uses an unsupported private API and can lead to account restrictions. Archive import above is recommended. No scheduled sync or automatic retry; errors, challenges, or account changes stop collection.</p>
+      <label class="small" for="connectionsLimit">Maximum connections to read (1–2,000)</label>
+      <input id="connectionsLimit" type="number" min="1" max="2000" value="100">
+      <label class="small"><input id="connectionsLiveConfirm" type="checkbox"> I understand the account risk and approve this live sync to the selected destination.</label>
+      <button id="connectionsLiveStart" class="btn" type="button" disabled>Sync my connections</button>
+    </details>
   </section>
   <!-- First run: sign in, then pick a play -->
   <section id="signIn" hidden>

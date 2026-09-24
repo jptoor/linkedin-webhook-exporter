@@ -24,7 +24,7 @@ export interface PageContext {
 }
 
 export type ContentToBackground =
-  | { type: "CONNECTIONS_START"; tabId?: number; limit?: number; destinationId?: string }
+  | { type: "CONNECTIONS_START"; confirmed?: boolean; tabId?: number; limit?: number; destinationId?: string }
   | { type: "CONNECTIONS_IMPORT"; csv: string; ownerUrl: string; confirmed: boolean; destinationId: string }
   | { type: "CONNECTIONS_STOP" }
   | { type: "CONNECTIONS_STATUS" }

@@ -530,10 +530,10 @@ See `ACCEPTANCE_TESTS.md`. Every criterion maps to an automated test
 
 ## Full connections archive import
 
-Bulk connections require an official Connections.csv export. The panel previews
+The recommended bulk connection flow uses an official Connections.csv export. The panel previews
 it locally and requires owner URL, destination and explicit confirmation.
 Only trusted extension pages may send CONNECTIONS_IMPORT with csv, ownerUrl,
-confirmed and destinationId. CONNECTIONS_START is rejected; no crawler remains.
+confirmed and destinationId.
 CONNECTIONS_STATUS and CONNECTIONS_STOP expose scalar progress and cancellation.
 
 The worker validates every row before admission: required headers, canonical
@@ -551,3 +551,21 @@ Leads add connection_owner_url, connection_source: archive, connected_at as an
 ISO date (no invented time), and connection_degree: 1st. The previous optional
 connection_owner_urn remains supported for compatibility but is not invented.
 Archive dedupe uses declared owner URL plus member URL.
+
+## Optional live connection sync
+
+CONNECTIONS_START requires an extension-page sender, confirmed: true, tabId,
+destinationId and a limit from 1 to 2,000 within the remaining daily allowance.
+The panel presents archive import first; the collapsed live-sync option requires
+fresh risk acknowledgement per run. The shared coordinator prevents overlapping
+archive imports and live syncs.
+
+The isolated content script reads JSESSIONID in memory, checks current-user
+identity before each connections page and parses referenced connection entities.
+It rejects changed sessions/accounts, repeated edges and malformed pagination.
+Requests reject redirects, time out after 15 seconds and stop on HTTP errors or
+challenge pages without retries. Stop aborts an in-flight collection request;
+worker interruption never automatically resumes collection. Already queued
+records keep normal delivery retries, destination fingerprints and identity checks.
+Live records retain connection_owner_urn and connected_at; archive ownership
+remains separately declared through connection_owner_url and connection_source.

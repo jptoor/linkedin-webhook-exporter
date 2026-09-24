@@ -101,7 +101,7 @@ not a production service.
 4. Enter your profile URL and review the local preview, destination, and daily cap.
 5. Confirm that this is your own full export, then click **Import connections**.
 
-The extension does not crawl connections or read a session token for this flow.
+The archive flow does not crawl connections or read a session token.
 It excludes email and unrelated columns; never upload the complete ZIP. The file
 and declared owner cannot be independently verified. Connection records indicate
 relationships, not buying intent or relationship strength.
@@ -110,6 +110,21 @@ Stopping an import leaves previously queued records in the delivery queue.
 If the daily cap interrupts an import, keep deduplication enabled and import the
 same file again after increasing the cap or waiting. “Processed” and “queued” do
 not mean delivered: check Recent activity for failures.
+
+## Optional live connections sync
+
+Expand **Optional: sync connections from your signed-in account** in the side
+panel. Open a signed-in platform tab, choose a destination and read limit, then
+acknowledge the account risk and click **Sync my connections**. Archive import
+remains the recommended path.
+
+Live sync uses the private connections API and a session CSRF value held only in
+the content script's memory. It does not store or export that value. Each run
+requires fresh confirmation. There is no scheduled sync or automatic collection
+retry. Account/session changes, challenges, timeouts, rate limits and malformed
+responses stop collection. The Stop button stops collection; already queued
+records still proceed to delivery. Only one archive import or live sync runs at
+a time. Limits and pacing do not guarantee protection against restrictions.
 
 ## Account restrictions and data handling
 

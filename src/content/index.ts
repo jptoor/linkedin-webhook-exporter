@@ -1,3 +1,4 @@
+import "./connections";
 import type { BackgroundToContent, BasketResponse, CaptureResponse, ContentSettingsResponse, PageContext } from "../shared/messages";
 import { ApiIndex, enrichLead, isInterceptedUrl } from "../shared/linkedin-api";
 import { dedupeKey } from "../shared/normalize";

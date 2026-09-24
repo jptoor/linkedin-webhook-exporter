@@ -1,8 +1,8 @@
 # Extension risk review — September 23, 2026
 
-Require the official full connections export for bulk imports. Do not collect
-connections through a signed-in session. This removes a source of extra profile
-requests; it does not make the remaining page-capture extension risk-free.
+Recommend the official full connections export for bulk imports. Optional live
+connections sync is retained at the user’s request, behind fresh acknowledgement
+for each run. It makes extra authenticated requests and can cause restrictions.
 
 ## Comparable products
 
@@ -28,7 +28,7 @@ account will avoid restrictions.
 
 | Risk | Evidence in this repository | Disposition |
 |---|---|---|
-| High: authenticated bulk collection | The former content/connections.ts read a CSRF value and paginated private endpoints. | Removed. The old start message fails explicitly; bulk import requires CSV and confirmation. |
+| High: authenticated bulk collection | content/connections.ts reads a CSRF value and pages private endpoints for explicit live sync. | Retained as an opt-in option. Archive import is recommended. Each run needs confirmation, has a read limit, and stops on HTTP errors, challenges, timeout or account changes; no collection retries or automatic resume. |
 | High: passive page interception | content/page-bridge.ts hooks fetch, XHR and clipboard. Disabling interception stops consumption, not installed hooks. | Still present for manual capture. Disable the extension on the platform for an archive-only operating policy; a future archive-only package should remove these scripts and host permissions. |
 | High: silent queue loss | background/queue.ts previously kept only the newest 500 records, including unsent records. | Fixed: pending, sending and failed items are retained; only sent history is capped. New capture rejects queues beyond a 6 MB budget rather than evicting pending work. |
 | High: credentials in local storage | Destination API keys, headers and signing secrets share extension storage with queue data. | Local storage restricted to trusted extension contexts. Browser-profile access still exposes it; it is not an encrypted credential vault. |
@@ -41,7 +41,7 @@ account will avoid restrictions.
 | Medium: downstream processing | A selected play can enrich records, spend credits or send data elsewhere; search forwarding delegates retrieval. | Preview the destination and disclose potential credits. Review the play and receiver independently; moving collection to a backend does not establish permission. |
 | Medium: extension privileges and updates | Automatic content scripts run on supported pages; optional webhook origins grant outbound access. | No cookies or scripting permission added. Review packaged permissions and updates; source review does not attest third-party builds or dependencies. |
 
-## Required import flow
+## Recommended archive flow
 
 1. Request the official larger data archive including all connections.
 2. Wait for the official download, extract it locally, and select Connections.csv.
@@ -53,7 +53,7 @@ The parser rejects malformed files before admission, including missing required
 columns, invalid URLs/dates and duplicate member rows. It supports CSV quoting,
 BOMs and the export preamble. The limits are 10 MB and 30,000 records. Dates stay
 date-only; no connection timestamp or verified owner URN is invented. Stopping
-admission does not cancel deliveries already queued. Full export is a user
+admission does not cancel deliveries already queued. Full export is the archive flow’s user
 requirement; a CSV alone cannot prove all connections were included.
 
 ## Review scope

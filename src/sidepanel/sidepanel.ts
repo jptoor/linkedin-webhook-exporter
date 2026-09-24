@@ -621,11 +621,14 @@ function archiveControls() {
   const dest = state?.settings.destinations.find(d => d.id === state?.settings.activeDestinationId);
   if (previewDestination !== JSON.stringify(dest)) {
     $<HTMLInputElement>("connectionsConfirm").checked = false;
+    $<HTMLInputElement>("connectionsLiveConfirm").checked = false;
     previewDestination = JSON.stringify(dest) ?? null;
   }
   $("connectionsDestination").textContent = dest ? `Destination: ${dest.name} (${dest.kind === "webhook" ? safeHost(dest.url) : dest.playName}). ${archiveCount} records in the file; ${state?.remainingToday ?? 0} exports remain today. Plays may use credits.` : "Choose a destination before importing.";
   $<HTMLButtonElement>("connectionsStart").disabled = archiveRunning || !archiveCsv || !archiveCount || !dest || !$<HTMLInputElement>("connectionsConfirm").checked;
   $("connectionsStop").hidden = !archiveRunning;
+  $<HTMLButtonElement>("connectionsLiveStart").disabled = archiveRunning || !dest || !$<HTMLInputElement>("connectionsLiveConfirm").checked;
+  for (const id of ["connectionsLimit", "connectionsLiveConfirm"]) $<HTMLInputElement>(id).disabled = archiveRunning;
   for (const id of ["connectionsOwner", "connectionsFile", "connectionsConfirm"]) $<HTMLInputElement>(id).disabled = archiveRunning;
 }
 async function previewArchive() {
@@ -675,4 +678,22 @@ $("connectionsStart").addEventListener("click", async () => {
 $("connectionsStop").addEventListener("click", async () => {
   await msg({ type: "CONNECTIONS_STOP" });
   $("connectionsStatus").textContent = "Stopping… Previously queued records will still be delivered.";
+});
+
+$("connectionsLiveConfirm").addEventListener("change", archiveControls);
+$("connectionsLimit").addEventListener("input", () => {
+  $<HTMLInputElement>("connectionsLiveConfirm").checked = false;
+  archiveControls();
+});
+$("connectionsLiveStart").addEventListener("click", async () => {
+  const destinationId = state?.settings.activeDestinationId;
+  if (!destinationId || activeTabId == null || !$<HTMLInputElement>("connectionsLiveConfirm").checked) return;
+  const tabId = activeTabId;
+  $<HTMLInputElement>("connectionsLiveConfirm").checked = false;
+  archiveControls();
+  try {
+    const result = await msg<ConnectionSyncState & { error?: string }>({ type: "CONNECTIONS_START", tabId, destinationId, limit: Number($<HTMLInputElement>("connectionsLimit").value), confirmed: true });
+    if (result.error) { $("connectionsStatus").textContent = result.error; return; }
+    await refreshConnections();
+  } catch { $("connectionsStatus").textContent = "Live sync interrupted. Check Recent activity before starting again."; }
 });
