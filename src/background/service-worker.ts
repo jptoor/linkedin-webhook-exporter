@@ -501,8 +501,9 @@ async function handleSearchCapture(msg: SearchMsg): Promise<SearchCaptureRespons
     queue.push(newItem(eventId, body, [key], 0, now, key, dest, `search: ${name ?? record.search_url}`, identity));
     queue[queue.length - 1].destinationFingerprint = await destinationFingerprint(dest);
     dedupe[key] = { t: now, confirmed: false, item: eventId };
-    await saveDedupe(dedupe);
-    await saveQueue(prune(queue, now));
+    const retained = prune(queue, now);
+    await chrome.storage.local.set({ [KEYS.dedupe]: dedupe, [KEYS.queue]: retained });
+    await scheduleAlarm(retained);
     await logEvent("search.saved", `Search sent to ${describeDestination(dest)}: ${name ?? record.search_url} (limit ${limit})`, { eventId, pageType: msg.pageType, searchUrl: record.search_url, totalHint: hint, limit, savedSearchId: savedId, destination: dest.id });
     void flush();
     broadcast({ type: "STATE_CHANGED" });

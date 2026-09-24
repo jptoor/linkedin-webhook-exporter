@@ -295,7 +295,7 @@ describe("search hand-off", () => {
 describe("lease recovery and queue commands", () => {
   it("a stale sending item (worker died mid-request) is retried on the next flush", async () => {
     fake.store.queue = [{ id: "stuck-xxxxxxxx", createdAt: Date.now(), nextAttemptAt: 1, attempts: 1, status: "sending", sendingAt: Date.now() - 10 * 60_000, body: "{}", leadUrls: ["k"], leadCount: 1, dedupeKey: "k", lastError: null, lastStatus: null, destinationId: "w1", destinationKind: "webhook" }];
-    fake.store.queue[0].destinationFingerprint = await destinationFingerprint((await getSettings()).destinations[0]);
+    queue()[0].destinationFingerprint = await destinationFingerprint((await getSettings()).destinations[0]);
     await send({ type: "RETRY_NOW" }, PANEL);
     await flushed();
     expect(queue()[0].status).toBe("sent");
