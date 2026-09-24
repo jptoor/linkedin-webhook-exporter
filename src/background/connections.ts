@@ -17,7 +17,7 @@ async function publish(): Promise<void> {
 export async function connectionStatus(): Promise<ConnectionSyncState> {
   if (state) return { ...state };
   const previous = (await storage().get(KEY))[KEY] as ConnectionSyncState | undefined;
-  // A worker restart never resumes archive admission automatically.
+  // A worker restart never resumes collection or archive admission automatically.
   if (!state) state = previous?.status === "running" ? { ...previous, status: "stopped", message: "Import was interrupted. Queued records remain in Recent activity. Start again to continue." } : previous ?? { ...IDLE_CONNECTION_SYNC };
   return { ...state };
 }
@@ -72,7 +72,7 @@ export async function startConnections(opts: Options): Promise<ConnectionSyncSta
         }
         if (page.leads.length) {
           const result = await opts.enqueue(page.leads, current.id);
-          if (!result.ok) throw new Error(result.detail ?? `Import paused: ${result.rejectedReason}. ${start} of ${total} file records processed. Adjust the export cap or wait, then import the same file again; keep deduplication enabled. Previously queued records remain in Recent activity.`);
+          if (!result.ok) throw new Error(result.detail ?? (!("leads" in opts) ? `Sync stopped: ${result.rejectedReason}. Previously queued records remain in Recent activity.` : `Import paused: ${result.rejectedReason}. ${start} of ${total} file records processed. Adjust the export cap or wait, then import the same file again; keep deduplication enabled. Previously queued records remain in Recent activity.`));
           state!.queued += result.queued;
           state!.skipped += result.skippedDuplicates.length;
         }
