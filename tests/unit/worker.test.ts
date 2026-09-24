@@ -3,6 +3,8 @@
  *  recovery, message trust boundary, secret redaction, activity log, the
  *  cross-page basket, Deepline play destinations and search hand-off. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { destinationFingerprint } from "../../src/background/queue";
+import { getSettings } from "../../src/shared/settings";
 import { makeFakeChrome, messenger } from "./fake-chrome";
 
 const PAGE = { id: "ext-id", url: "https://www.linkedin.com/in/x/", tab: { id: 7, url: "https://www.linkedin.com/in/x/" } };
@@ -293,10 +295,20 @@ describe("search hand-off", () => {
 describe("lease recovery and queue commands", () => {
   it("a stale sending item (worker died mid-request) is retried on the next flush", async () => {
     fake.store.queue = [{ id: "stuck-xxxxxxxx", createdAt: Date.now(), nextAttemptAt: 1, attempts: 1, status: "sending", sendingAt: Date.now() - 10 * 60_000, body: "{}", leadUrls: ["k"], leadCount: 1, dedupeKey: "k", lastError: null, lastStatus: null, destinationId: "w1", destinationKind: "webhook" }];
+    fake.store.queue[0].destinationFingerprint = await destinationFingerprint((await getSettings()).destinations[0]);
     await send({ type: "RETRY_NOW" }, PANEL);
     await flushed();
     expect(queue()[0].status).toBe("sent");
     expect(log().some((e) => e.kind === "lease.recovered")).toBe(true);
+  });
+  it("holds legacy queue records whose original destination cannot be verified", async () => {
+    fake.store.queue = [{ id: "legacy-xxxxxxxx", createdAt: Date.now(), nextAttemptAt: 1, attempts: 0, status: "pending", body: "{}", leadUrls: [], leadCount: 1, destinationId: "w1", destinationKind: "webhook" }];
+    await send({ type: "RETRY_NOW" }, PANEL);
+    await flushed();
+    expect(queue()[0].status).toBe("failed");
+    expect(queue()[0].lastError).toContain("destination_changed_or_unverified");
+    expect(apiCalls()).toHaveLength(0);
+    expect(queue()[0].body).toBe("{}");
   });
   it("clear history keeps only in-flight items; retry re-queues failed", async () => {
     fake.store.queue = [

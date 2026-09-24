@@ -71,7 +71,8 @@ your own receiver) is a separate data processor.
 
 ## Telemetry
 
-On by default, off in Settings. Two kinds:
+Off by default for new installs; existing explicit choices are preserved.
+Enable or disable it in Settings. Two kinds:
 
 - Usage events (`installed`, `signed_in`, `destination_connected`,
   `push_queued`, `search_import_started`) with the extension version, browser

@@ -667,6 +667,7 @@ $("connectionsStart").addEventListener("click", async () => {
   try {
     const result = await msg<ConnectionSyncState & { error?: string }>({ type: "CONNECTIONS_IMPORT", csv: archiveCsv, ownerUrl: $<HTMLInputElement>("connectionsOwner").value, confirmed: true, destinationId });
     if (result.error) { $("connectionsStatus").textContent = result.error; return; }
+    $<HTMLInputElement>("connectionsConfirm").checked = false;
     await refreshConnections();
   } catch { $("connectionsStatus").textContent = "Import interrupted. Check Recent activity before retrying."; }
   finally { archiveControls(); }

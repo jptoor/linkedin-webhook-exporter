@@ -98,3 +98,8 @@ describe("sanitizeSettings", () => {
     expect(JSON.stringify(red)).not.toMatch(/SECRET|TOKEN/);
   });
 });
+
+it("requires opting in to reporting for fresh settings and preserves explicit choices", () => {
+  expect(sanitizeSettings({}).telemetry).toBe(false);
+  expect(sanitizeSettings({telemetry:true}).telemetry).toBe(true);
+});

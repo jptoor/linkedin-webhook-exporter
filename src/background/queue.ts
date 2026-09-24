@@ -70,3 +70,10 @@ export function counts(items: QueueItem[]): Record<QueueStatus, number> {
   for (const i of items) c[i.status]++;
   return c;
 }
+
+/** Pin routing, credentials and mapping without persisting another secret copy. */
+export async function destinationFingerprint(dest: Destination): Promise<string> {
+  const values = Object.entries(dest).filter(([key]) => !["name", "favorite"].includes(key)).sort(([a], [b]) => a.localeCompare(b));
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(values)));
+  return Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, "0")).join("");
+}

@@ -270,7 +270,7 @@ export const DEFAULT_SETTINGS: Settings = {
   includeAbout: true,
   searchDefaultLimit: 100,
   deeplineBaseUrl: "https://code.deepline.com",
-  telemetry: true,
+  telemetry: false,
   intercept: true
 };
 
@@ -323,6 +323,8 @@ export interface QueueItem {
   /** Which destination the item is bound to. An item outlives destination
    *  edits: if its destination is deleted the item fails permanently. */
   destinationId: string;
+  /** Hash of the approved destination configuration, excluding display-only fields. */
+  destinationFingerprint?: string;
   destinationKind: DestinationKind;
   /** Human label for the activity feed: a name, "12 leads", or a search name. */
   label: string;

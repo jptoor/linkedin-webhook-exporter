@@ -765,6 +765,8 @@ test('archive: local preview, explicit confirmation, signed delivery and dedupe'
   expect(hook.leads[0].json.lead).toMatchObject({connection_source:'archive',connection_owner_url:'https://www.linkedin.com/in/network-owner',connected_at:'2024-01-01',connection_degree:'1st'});
   expect(JSON.stringify(hook.received)).not.toContain('private@example.com');
   expect(JSON.stringify(await readStorage(context, extensionId))).not.toContain('private@example.com');
+  await expect(panel.locator('#connectionsStart')).toBeDisabled();
+  await panel.locator('#connectionsConfirm').check();
   await panel.locator('#connectionsStart').click();
   await expect(panel.locator('#connectionsStatus')).toContainText('3 already exported');
   expect(hook.leads).toHaveLength(3);
@@ -795,8 +797,29 @@ test('archive: daily cap reports partial progress and reimport continues with de
   await expect(panel.locator('#connectionsStatus')).toContainText('2 of 3 file records processed');
   await hook.waitFor(2);
   await setSettings(context, extensionId, {dailyCap:10});
+  await panel.locator('#connectionsConfirm').check();
   await panel.locator('#connectionsStart').click();
   await expect(panel.locator('#connectionsStatus')).toContainText('All file records processed');
   await hook.waitFor(3);
   expect(hook.leads).toHaveLength(3);
+});
+
+test('guardrail: editing a queued destination cannot reroute its records', async () => {
+  await configure(context, extensionId, {url:hook.url, signingSecret:SECRET});
+  hook.failNext = [503];
+  const page = await context.newPage();
+  await page.goto(`${site.origin}/in/jane-doe-123/`);
+  await clickPush(page);
+  await hook.waitFor(1);
+  const original = (await readStorage(context, extensionId)).settings.destinations;
+  await setSettings(context, extensionId, {destinations:original.map((d: any) => ({...d,url:hook.url+'?different-recipient=1'}))});
+  await sendMessage(context, extensionId, {type:'RETRY_NOW'});
+  const blocked = await readStorage(context, extensionId);
+  expect(blocked.queue[0].status).toBe('failed');
+  expect(blocked.queue[0].lastError).toContain('destination_changed_or_unverified');
+  expect(hook.received).toHaveLength(1);
+  await setSettings(context, extensionId, {destinations:original});
+  await sendMessage(context, extensionId, {type:'RETRY_NOW'});
+  await hook.waitFor(2);
+  expect(hook.received[1].body).toBe(hook.received[0].body);
 });

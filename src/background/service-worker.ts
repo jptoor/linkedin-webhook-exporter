@@ -16,7 +16,7 @@ import { isAllowedPageUrl, isPageType, validateLead, validateLeads } from "../sh
 import { fetchSession, identityKey, isDeeplineTab, keySession, pollClaim, registerDevice, signInUrl, type Connection, type PendingClaim, type SessionState } from "./auth";
 import { withLock } from "./lock";
 import { clearLog, logEvent, readLog } from "../shared/log";
-import { afterAttempt, claim, clearQueue, due, newItem, nextWake, prune, recoverStaleLeases } from "./queue";
+import { afterAttempt, claim, clearQueue, destinationFingerprint, due, newItem, nextWake, prune, recoverStaleLeases } from "./queue";
 import { playRunBody, sendBody } from "./sender";
 
 const VERSION = typeof __EXTENSION_VERSION__ === "string" ? __EXTENSION_VERSION__ : "dev";
@@ -372,7 +372,7 @@ function enqueueLeads(dest: Destination, settings: Settings, leads: LeadRecord[]
   return { queued: leads.length, eventIds };
 }
 
-async function handleCapture(msg: CaptureMsg, connections = false): Promise<CaptureResponse> {
+async function handleCapture(msg: CaptureMsg, connections = false, expectedDestination?: string): Promise<CaptureResponse> {
   return withLock(async () => {
     const settings = await getSettings();
     const now = Date.now();
@@ -386,6 +386,7 @@ async function handleCapture(msg: CaptureMsg, connections = false): Promise<Capt
     };
     if (!isPageType(msg.pageType) || !isAllowedPageUrl(msg.pageUrl, TEST_BUILD)) return reject("invalid_message");
     const dest = resolveDestination(settings, msg.destinationId);
+    if (expectedDestination && JSON.stringify(dest) !== expectedDestination) throw new Error("The destination changed. Preview and confirm again.");
     const problem = await destinationProblem(dest);
     if (problem || !dest) return reject(problem ?? "no_destination");
     const identity = usesSession(dest) ? identityKey(sessionCache) : null;
@@ -446,10 +447,12 @@ async function handleCapture(msg: CaptureMsg, connections = false): Promise<Capt
 
     const queue = recoverStaleLeases(await loadQueue(), now);
     const enq = enqueueLeads(dest, settings, leads, source, imp, !!msg.force, now, queue, dedupe, identity);
+    const fingerprint = await destinationFingerprint(dest);
+    for (const item of queue) if (enq.eventIds.includes(item.id)) item.destinationFingerprint = fingerprint;
     if (new TextEncoder().encode(JSON.stringify(queue)).byteLength > 6 * 1024 * 1024) return reject("invalid_message", {}, "Delivery queue is full. Wait for delivery, clear completed history, then import again. No records in this batch were queued.");
-    await saveDedupe(dedupe);
-    await saveDaily({ ...daily, queued: daily.queued + leads.length });
-    await saveQueue(prune(queue, now));
+    const retained = prune(queue, now);
+    await chrome.storage.local.set({ [KEYS.dedupe]: dedupe, [KEYS.daily]: { ...daily, queued: daily.queued + leads.length }, [KEYS.queue]: retained });
+    await scheduleAlarm(retained);
     await logEvent("capture.queued", `${leads.length} lead(s) queued for ${describeDestination(dest)}`, { count: leads.length, importId, importKind: imp.import_kind, searchName: imp.search_name, events: enq.eventIds, leads: leads.map(dedupeKey), remainingToday: remaining - leads.length, destination: dest.id });
     void flush();
     broadcast({ type: "STATE_CHANGED" });
@@ -496,6 +499,7 @@ async function handleSearchCapture(msg: SearchMsg): Promise<SearchCaptureRespons
     const body = dest.kind === "webhook" ? JSON.stringify(buildSearchBody(record, dest.mappingPreset, source, settings.customFields, eventId, new Date(now).toISOString(), imp)) : playRunBody(dest, buildSearchRun(dest.input, record, source, imp, settings.customFields, name));
     const queue = recoverStaleLeases(await loadQueue(), now);
     queue.push(newItem(eventId, body, [key], 0, now, key, dest, `search: ${name ?? record.search_url}`, identity));
+    queue[queue.length - 1].destinationFingerprint = await destinationFingerprint(dest);
     dedupe[key] = { t: now, confirmed: false, item: eventId };
     await saveDedupe(dedupe);
     await saveQueue(prune(queue, now));
@@ -696,7 +700,7 @@ async function flush(): Promise<void> {
       // A run queued on the rep's sign-in goes out only under that same
       // user and org. Signed out or switched account: fail it, never retry.
       const identityProblem = usesSession(claimed.dest) && (claimed.item.sessionIdentity ?? null) !== (await currentIdentity());
-      const result = identityProblem ? { ok: false, status: null, retryable: false, error: sessionCache?.signedIn ? "account_changed" : "signed_out" } : await sendBody(await withKey(claimed.dest), claimed.item.body, claimed.item.id, { version: VERSION, dedupeKey: claimed.item.dedupeKey });
+      const result = identityProblem ? { ok: false, status: null, retryable: false, error: sessionCache?.signedIn ? "account_changed" : "signed_out" } : claimed.item.destinationFingerprint !== await destinationFingerprint(claimed.dest) ? { ok: false, status: null, retryable: false, error: "destination_changed_or_unverified: restore the approved configuration or review and reimport" } : await sendBody(await withKey(claimed.dest), claimed.item.body, claimed.item.id, { version: VERSION, dedupeKey: claimed.item.dedupeKey });
       await withLock(async () => {
         const now = Date.now();
         const items = await loadQueue();
@@ -863,7 +867,7 @@ chrome.runtime.onMessage.addListener((msg: ContentToBackground, sender, sendResp
           },
           enqueue: async (records, runId) => {
             if (JSON.stringify(resolveDestination(await getSettings(), msg.destinationId)) !== destinationSnapshot) throw new Error("The destination changed. Import stopped.");
-            return handleCapture({ type: "CAPTURE", leads: records, pageType: "connections", pageUrl: "https://www.linkedin.com/mynetwork/invite-connect/connections/", destinationId: msg.destinationId, importId: runId }, true);
+            return handleCapture({ type: "CAPTURE", leads: records, pageType: "connections", pageUrl: "https://www.linkedin.com/mynetwork/invite-connect/connections/", destinationId: msg.destinationId, importId: runId }, true, destinationSnapshot);
           }
         });
       }

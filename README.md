@@ -4,8 +4,8 @@ Open-source Chrome extension (MIT) for collecting people from supported profile
 and search pages and sending them to a configured play or webhook. Select
 people across pages, forward a search to a backend, or import your full connections export from the side panel.
 
-Settings live in your browser profile. Usage reporting is enabled by default
-and can be disabled in Settings. See [PRIVACY.md](PRIVACY.md) for data handling,
+Settings live in your browser profile. Usage reporting is off by default for new installs
+and can be enabled in Settings. Existing choices are preserved. See [PRIVACY.md](PRIVACY.md) for data handling,
 authentication, and reporting details.
 
 ## Features
